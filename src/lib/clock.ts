@@ -22,20 +22,27 @@ export const serverNow = () => Date.now() + offset;
 type Listener = () => void;
 const listeners = new Set<Listener>();
 let current = serverNow();
-let timer: ReturnType<typeof setTimeout> | null = null;
+let timer: ReturnType<typeof setInterval> | null = null;
 
 function emit() {
   current = serverNow();
-  for (const l of listeners) l();
+  for (const l of listeners) {
+    // One failing subscriber must never stop every timer on the page.
+    try {
+      l();
+    } catch (err) {
+      console.error('[loop] timer listener failed', err);
+    }
+  }
 }
 
-function schedule() {
-  // Align ticks to whole server seconds so every timer flips together.
-  const delay = 1000 - (serverNow() % 1000) + 5;
-  timer = setTimeout(() => {
-    emit();
-    schedule();
-  }, delay);
+/**
+ * Polls a few times a second and emits whenever the server-aligned second
+ * changes. Unlike a chain of timeouts it cannot stall, and it re-syncs on its
+ * own after sleep or clock adjustments.
+ */
+function check() {
+  if (Math.floor(serverNow() / 1000) !== Math.floor(current / 1000)) emit();
 }
 
 function onVisible() {
@@ -46,14 +53,14 @@ export function subscribeNow(l: Listener) {
   listeners.add(l);
   if (listeners.size === 1) {
     current = serverNow();
-    schedule();
+    timer = setInterval(check, 200);
     document.addEventListener('visibilitychange', onVisible);
     window.addEventListener('focus', emit);
   }
   return () => {
     listeners.delete(l);
     if (!listeners.size) {
-      if (timer) clearTimeout(timer);
+      if (timer) clearInterval(timer);
       timer = null;
       document.removeEventListener('visibilitychange', onVisible);
       window.removeEventListener('focus', emit);

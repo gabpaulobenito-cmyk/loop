@@ -31,7 +31,15 @@ test('production lifecycle, persistence, timers and layouts', async ({ page }) =
     const row = page.getByRole('list', { name: 'Running loops' }).locator('[data-row]', { hasText: title });
     const timer = row.locator('.row__timer');
     await expect(row).toBeVisible();
-    await expect.poll(async () => secs(await timer.innerText()), { timeout: 8000 }).toBeGreaterThanOrEqual(3);
+    try {
+      await expect.poll(async () => secs(await timer.innerText()), { timeout: 8000 }).toBeGreaterThanOrEqual(3);
+    } catch (err) {
+      const st = await (await page.request.get('/api/state', { headers: H })).json();
+      const l = st.loops.find((x: { title: string }) => x.title === title);
+      const client = await page.evaluate(() => ({ now: Date.now(), timer: document.querySelector('[data-row] .row__timer')?.textContent }));
+      console.log('DIAG', JSON.stringify({ serverNow: st.serverNow, loop: l, client, ui: await timer.innerText() }));
+      throw err;
+    }
 
     // Refresh: timer continues and agrees with server timestamps.
     const before = secs(await timer.innerText());
