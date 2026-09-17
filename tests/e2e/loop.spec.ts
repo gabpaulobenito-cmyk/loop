@@ -64,22 +64,29 @@ test.describe('core loop lifecycle (desktop)', () => {
     await expect(openRow).toBeVisible();
     await expect(openRow.locator('[data-marker="open"]')).toBeVisible();
 
-    // Resume via row click (V2: ROW ⇄ START/STOP). Pause past the double-tap guard.
+    // Clicking the row only opens details — it must not start the loop.
+    await openRow.locator('.row__title').click();
+    const inspector = page.getByRole('dialog', { name: 'Loop details' });
+    await expect(inspector).toBeVisible();
     await page.waitForTimeout(400);
-    await openRow.locator('.row__note').click();
+    await expect(openRow).toHaveAttribute('data-state', 'open');
+    await page.keyboard.press('Escape');
+    await expect(inspector).toHaveCount(0);
+
+    // Resume with the ▶ button. Pause past the double-tap guard.
+    await page.getByRole('button', { name: `Resume ${title}` }).click();
     await expect(row).toBeVisible();
     // Accumulated time carries over into the resumed session.
     await expect.poll(async () => secs(await timer.innerText()), { timeout: 6000 }).toBeGreaterThanOrEqual(t2 + 1);
 
-    // Title toggles priority without toggling the timer.
-    await row.getByRole('button', { name: /Toggle priority/ }).click();
+    // Priority lives in the details pop-up; toggling it doesn't touch the timer.
+    await row.click();
+    await expect(inspector).toBeVisible();
+    await inspector.getByRole('button', { name: 'PRIORITY', exact: true }).click();
     await expect(row.locator('[data-marker="priority"]')).toBeVisible();
     await expect(row).toHaveAttribute('data-state', 'running');
 
-    // Inspector shows real session history.
-    await row.getByRole('button', { name: `Session detail for ${title}` }).click();
-    const inspector = page.getByRole('dialog', { name: 'Session detail' });
-    await expect(inspector).toBeVisible();
+    // Details show real session history.
     await expect(inspector.getByRole('list', { name: 'Session history' }).locator('li')).toHaveCount(2);
     await expect(inspector.getByText('→ NOW')).toBeVisible();
 
@@ -95,8 +102,8 @@ test.describe('core loop lifecycle (desktop)', () => {
     await expect(row).toBeVisible();
 
     // Close again, then reopen from the archive.
-    await row.getByRole('button', { name: `Session detail for ${title}` }).click();
-    await page.getByRole('dialog', { name: 'Session detail' }).getByRole('button', { name: /CLOSE LOOP/ }).click();
+    await row.click();
+    await inspector.getByRole('button', { name: /CLOSE LOOP/ }).click();
     await page.keyboard.press('Escape');
     const archiveToggle = page.getByRole('button', { name: /CLOSED/ });
     if ((await archiveToggle.getAttribute('aria-expanded')) !== 'true') await archiveToggle.click();
@@ -180,34 +187,34 @@ test.describe('new loop pop-up', () => {
   });
 });
 
-test.describe('⋮ opens the detail drawer', () => {
-  for (const width of [1024, 393, 220]) {
-    test(`rename, note, delete and undo from the drawer at ${width}px`, async ({ page }) => {
+test.describe('row opens the details pop-up', () => {
+  for (const width of [1280, 393, 220]) {
+    test(`rename, note, delete and undo from the pop-up at ${width}px`, async ({ page }) => {
       await page.setViewportSize({ width, height: 800 });
       await login(page);
       await resetData(page.request);
-      const title = `Drawer ${width} ${Date.now()}`;
+      const title = `Details ${width} ${Date.now()}`;
       await page.request.post('/api/loops', { headers: H, data: { id: crypto.randomUUID(), title, start: true } });
       await page.reload();
 
-      // ⋮ sits beside start/stop, opens the drawer, and never toggles the row.
-      const more = page.getByRole('button', { name: `Details for ${title}` });
-      await expect(more).toBeVisible();
-      expect((await more.boundingBox())!.x + (await more.boundingBox())!.width).toBeLessThanOrEqual(width);
-      await more.click();
-      const drawer = page.getByRole('dialog', { name: 'Session detail' });
-      await expect(drawer).toBeVisible();
-      await expect(page.locator('[data-row]', { hasText: title })).toHaveAttribute('data-state', 'running');
+      // No ⋮ button any more; the row itself opens details and never toggles state.
+      await expect(page.locator('[data-ctl="more"]')).toHaveCount(0);
+      const row = page.locator('[data-row]', { hasText: title });
+      await row.click({ position: { x: 4, y: 4 } });
+      const dialog = page.getByRole('dialog', { name: 'Loop details' });
+      await expect(dialog).toBeVisible();
+      await page.waitForTimeout(200);
+      await expect(row).toHaveAttribute('data-state', 'running');
 
-      // The list peeks on the left; actions sit right under the title, above the stats.
-      await page.waitForTimeout(300); // slide-in animation
-      const dbox = (await drawer.boundingBox())!;
-      expect(dbox.x).toBeGreaterThan(0);
-      expect(dbox.x + dbox.width).toBeLessThanOrEqual(width + 0.5);
-      const actions = drawer.getByRole('group', { name: 'Loop actions' });
-      const abox = (await actions.boundingBox())!;
-      const sbox = (await drawer.locator('.insp-stats').boundingBox())!;
-      expect(abox.y).toBeLessThan(sbox.y);
+      // Centered pop-up inside the viewport with square corners.
+      const box = (await dialog.boundingBox())!;
+      expect(box.x).toBeGreaterThanOrEqual(0);
+      expect(box.x + box.width).toBeLessThanOrEqual(width + 0.5);
+      expect(await dialog.evaluate((el) => getComputedStyle(el).borderRadius)).toBe('0px');
+      if (width >= 600) expect(Math.abs(box.x + box.width / 2 - width / 2)).toBeLessThan(2);
+
+      const actions = dialog.getByRole('group', { name: 'Loop actions' });
+      expect((await actions.boundingBox())!.y).toBeLessThan((await dialog.locator('.insp-stats').boundingBox())!.y);
       for (const name of ['CLOSE LOOP', 'PRIORITY', 'RENAME', 'ADD NOTE', 'DELETE']) {
         await expect(actions.getByRole('button', { name, exact: true })).toBeVisible();
       }
@@ -215,36 +222,36 @@ test.describe('⋮ opens the detail drawer', () => {
       // Rename
       await actions.getByRole('button', { name: 'RENAME' }).click();
       const renamed = `${title} renamed`;
-      await drawer.getByRole('textbox', { name: 'Loop title' }).fill(renamed);
-      await drawer.getByRole('textbox', { name: 'Loop title' }).press('Enter');
-      await expect(drawer.locator('.insp-head__title')).toHaveText(renamed);
+      await dialog.getByRole('textbox', { name: 'Loop title' }).fill(renamed);
+      await dialog.getByRole('textbox', { name: 'Loop title' }).press('Enter');
+      await expect(dialog.locator('.insp-head__title')).toHaveText(renamed);
 
       // Add a note
       await actions.getByRole('button', { name: 'ADD NOTE' }).click();
-      await drawer.getByRole('textbox', { name: 'Context note' }).fill('note from drawer');
-      await drawer.getByRole('textbox', { name: 'Context note' }).press('Enter');
-      await expect(drawer.locator('.insp-head__note')).toHaveText('note from drawer');
+      await dialog.getByRole('textbox', { name: 'Context note' }).fill('note from pop-up');
+      await dialog.getByRole('textbox', { name: 'Context note' }).press('Enter');
+      await expect(dialog.locator('.insp-head__note')).toHaveText('note from pop-up');
 
       await page.keyboard.press('Escape');
-      await expect(drawer).toHaveCount(0);
-      const row = page.locator('[data-row]', { hasText: renamed });
+      await expect(dialog).toHaveCount(0);
+      const renamedRow = page.locator('[data-row]', { hasText: renamed });
       await page.reload();
-      await expect(row).toContainText('note from drawer');
+      await expect(renamedRow).toContainText('note from pop-up');
 
-      // Delete needs a confirming second click, then closes the drawer.
-      await page.getByRole('button', { name: `Details for ${renamed}` }).click();
+      // Delete needs a confirming second click, then closes the pop-up.
+      await renamedRow.click({ position: { x: 4, y: 4 } });
       await actions.getByRole('button', { name: 'DELETE' }).click();
-      await expect(row).toBeVisible();
+      await expect(renamedRow).toBeVisible();
       await actions.getByRole('button', { name: 'CONFIRM' }).click();
-      await expect(drawer).toHaveCount(0);
-      await expect(row).toHaveCount(0);
+      await expect(dialog).toHaveCount(0);
+      await expect(renamedRow).toHaveCount(0);
       await page.reload();
-      await expect(row).toHaveCount(0);
+      await expect(renamedRow).toHaveCount(0);
 
       // Undo brings it back, still running.
       await page.getByRole('button', { name: /^Undo: Deleted/ }).click();
-      await expect(row).toBeVisible();
-      await expect(row).toHaveAttribute('data-state', 'running');
+      await expect(renamedRow).toBeVisible();
+      await expect(renamedRow).toHaveAttribute('data-state', 'running');
     });
   }
 });
@@ -260,13 +267,15 @@ test.describe('slow network', () => {
     await page.reload();
     // Every mutation takes 400 ms to reach the server.
     await page.route('**/api/loops/**', async (route) => {
-      await new Promise((r) => setTimeout(r, 400));
-      await route.continue();
+      if (route.request().method() !== 'GET') await new Promise((r) => setTimeout(r, 400));
+      await route.continue().catch(() => {});
     });
 
     const row = page.locator('[data-row]', { hasText: title });
-    await row.getByRole('button', { name: `Start ${title}` }).click();
-    await row.getByRole('button', { name: /Toggle priority/ }).click();
+    await row.click();
+    const dialog = page.getByRole('dialog', { name: 'Loop details' });
+    await dialog.getByRole('button', { name: `Start ${title}` }).click();
+    await dialog.getByRole('button', { name: 'PRIORITY', exact: true }).click();
     // Optimistic UI shows both immediately…
     await expect(row).toHaveAttribute('data-state', 'running');
     await expect(row).toHaveAttribute('data-priority', 'true');
@@ -280,11 +289,14 @@ test.describe('slow network', () => {
       .toBe('running:true');
     await expect(row).toHaveAttribute('data-priority', 'true');
 
+    await page.keyboard.press('Escape');
+    await expect(dialog).toHaveCount(0);
+
     // Stop, then resume while the stop request is still in flight.
-    await page.unroute('**/api/loops/**');
+    await page.unrouteAll({ behavior: 'ignoreErrors' });
     await page.route('**/api/loops/**', async (route) => {
-      await new Promise((r) => setTimeout(r, 1200));
-      await route.continue();
+      if (route.request().method() !== 'GET') await new Promise((r) => setTimeout(r, 1200));
+      await route.continue().catch(() => {});
     });
     await row.getByRole('button', { name: `Stop ${title}` }).click();
     await expect(row).toHaveAttribute('data-state', 'open');
@@ -385,7 +397,6 @@ test.describe('responsive smoke', () => {
       await expect(page.locator('[data-row][data-state="running"] .row__timer').first()).toBeVisible();
       if (mode === 'mobile') await expect(page.getByRole('tablist', { name: 'Filter loops' })).toBeVisible();
       if (mode === 'desk' || mode === 'wide') await expect(page.getByRole('textbox', { name: /New loop title/ })).toBeVisible();
-      if (mode === 'wide') await expect(page.locator('.insp-pane .inspector')).toBeVisible();
 
       // Stop / start through the dedicated control works at every width.
       await page.getByRole('button', { name: 'Stop Yuna Research' }).click();

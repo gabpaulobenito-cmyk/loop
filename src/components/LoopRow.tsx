@@ -4,14 +4,13 @@ import { elapsedMs } from '../../shared/timer';
 import type { Loop } from '../../shared/types';
 import { Marker } from './Marker';
 import { Marquee } from './Marquee';
-import { MoreButton, ToggleButton } from './Glyphs';
+import { ToggleButton } from './Glyphs';
 
 export type RowVariant = 'desk' | 'rail' | 'mobile';
 
 export interface RowActions {
   toggle: (id: string) => void;
   reopen: (id: string) => void;
-  priority: (id: string) => void;
   inspect: (id: string) => void;
 }
 
@@ -51,14 +50,10 @@ function LoopRowImpl({ loop, variant, now, pending, selected, actions }: Props) 
   const age = now - loop.createdAt;
   const total = elapsedMs(loop, now);
 
+  // Clicking anywhere on a row opens its details. Only ▶ / ■ change its state.
   const onRowClick = (e: MouseEvent) => {
     if (hasSelection() || e.defaultPrevented) return;
-    if (closed) actions.inspect(id);
-    else actions.toggle(id);
-  };
-  const stop = (fn: () => void) => (e: MouseEvent) => {
-    e.stopPropagation();
-    fn();
+    actions.inspect(id);
   };
 
   const cls = [
@@ -73,36 +68,22 @@ function LoopRowImpl({ loop, variant, now, pending, selected, actions }: Props) 
       type="button"
       className="row__title"
       data-ctl="title"
-      title={closed ? title : `${title} — click to ${priority ? 'clear' : 'set'} priority`}
-      aria-label={closed ? `Inspect ${title}` : `${title}${priority ? ', priority' : ''}. Toggle priority`}
-      aria-pressed={closed ? undefined : priority}
-      onClick={stop(() => (closed ? actions.inspect(id) : actions.priority(id)))}
+      title={title}
+      aria-label={`${title}${priority ? ', priority' : ''}. Open details`}
+      aria-haspopup="dialog"
+      onClick={(e) => {
+        e.stopPropagation();
+        actions.inspect(id);
+      }}
     >
       {title}
     </button>
   );
 
-  const inspectLabel = `Session detail for ${title}`;
-  const timerBtn = (compact: boolean) => (
-    <button type="button" className="row__timer" data-ctl="meta" title="SESSION DETAIL" aria-label={inspectLabel} onClick={stop(() => actions.inspect(id))}>
-      {fmtTimer(total, { noSec: compact })}
-    </button>
-  );
-  const ageBtn = (
-    <button type="button" className="row__age" data-ctl="meta" title="SESSION DETAIL" aria-label={inspectLabel} onClick={stop(() => actions.inspect(id))}>
-      {fmtAge(age)}
-    </button>
-  );
+  const timer = (compact: boolean) => <span className="row__timer">{fmtTimer(total, { noSec: compact })}</span>;
+  const ageLabel = <span className="row__age">{fmtAge(age)}</span>;
   const toggle = (size: 'xs' | 'sm' | 'md' | 'lg') => (
-    <>
-      <ToggleButton
-        loop={loop}
-        size={size}
-        onToggle={() => actions.toggle(id)}
-        onReopen={() => actions.reopen(id)}
-      />
-      <MoreButton title={title} size={size} expanded={selected} onOpen={() => actions.inspect(id)} />
-    </>
+    <ToggleButton loop={loop} size={size} onToggle={() => actions.toggle(id)} onReopen={() => actions.reopen(id)} />
   );
   const common = {
     className: cls,
@@ -121,8 +102,8 @@ function LoopRowImpl({ loop, variant, now, pending, selected, actions }: Props) 
         <div className="row__line">
           <Marker loop={loop} />
           {titleBtn}
-          {running && timerBtn(true)}
-          {state === 'open' && ageBtn}
+          {running && timer(true)}
+          {state === 'open' && ageLabel}
           {closed && <span className="row__closedat">{fmtAge(now - (loop.closedAt ?? now))}</span>}
           {toggle('xs')}
         </div>
@@ -139,8 +120,8 @@ function LoopRowImpl({ loop, variant, now, pending, selected, actions }: Props) 
           {titleBtn}
           {note && <span className="row__note">{note}</span>}
         </div>
-        {running && timerBtn(true)}
-        {state === 'open' && ageBtn}
+        {running && timer(true)}
+        {state === 'open' && ageLabel}
         {closed && <span className="row__closedat">{fmtAge(now - (loop.closedAt ?? now))} ago</span>}
         {toggle('lg')}
       </li>
@@ -167,13 +148,13 @@ function LoopRowImpl({ loop, variant, now, pending, selected, actions }: Props) 
       {note ? <Marquee className="row__note" text={note} /> : <span className="row__note" />}
       <span className="row__div" aria-hidden="true" />
       {running ? (
-        timerBtn(false)
+        timer(false)
       ) : (
         <>
           <span className="row__active" title="Active time">
             {loop.accumulatedMs > 0 ? fmtHM(loop.accumulatedMs) : '—'}
           </span>
-          {ageBtn}
+          {ageLabel}
         </>
       )}
       {toggle('md')}

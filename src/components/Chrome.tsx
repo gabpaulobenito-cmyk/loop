@@ -257,57 +257,62 @@ export function CaptureDialog({ onClose, onCreate }: CaptureDialogProps) {
   return (
     <>
       <div className="scrim scrim--capture" onClick={onClose} />
-      <div className="capture" role="dialog" aria-modal="true" aria-labelledby="capture-heading">
-        <div className="capture__head">
+      <div className="capture" role="dialog" aria-modal="true" aria-label="New loop">
+        <div className="term-bar">
           <span className="marker marker--running" aria-hidden="true" />
-          <h2 id="capture-heading" className="capture__heading">NEW LOOP</h2>
+          <h2 id="capture-heading" className="term-bar__path">LOOP // NEW</h2>
           <span className="hdr__spacer" />
-          <button type="button" className="capture__esc" onClick={onClose} aria-label="Cancel">
+          <button type="button" className="term-bar__esc" onClick={onClose} aria-label="Cancel">
             ESC ✕
           </button>
         </div>
 
         <div className="capture__field capture__field--title">
-          <label className="capture__label" htmlFor="capture-title">WHAT ARE YOU STARTING?</label>
+          <label className="capture__label" htmlFor="capture-title">// WHAT ARE YOU STARTING?</label>
+          <div className="capture__line">
+          <span className="capture__prompt" aria-hidden="true">&gt;</span>
           <textarea
             id="capture-title"
             ref={titleRef}
             className="capture__title"
             rows={1}
             maxLength={140}
-            placeholder="Title"
+            placeholder="title"
             autoComplete="off"
             enterKeyHint="go"
             value={title}
             onChange={(e) => setTitle(e.target.value.replace(/\n/g, ' '))}
             onKeyDown={onKey}
           />
+          </div>
         </div>
 
         <div className="capture__field capture__field--note">
-          <label className="capture__label" htmlFor="capture-note">NOTE</label>
+          <label className="capture__label" htmlFor="capture-note">// NOTE</label>
+          <div className="capture__line">
+          <span className="capture__prompt capture__prompt--note" aria-hidden="true">#</span>
           <textarea
             id="capture-note"
             ref={noteRef}
             className="capture__note"
             rows={2}
             maxLength={280}
-            placeholder="Where you left off, what’s next (optional)"
+            placeholder="where you left off, what’s next (optional)"
             autoComplete="off"
             enterKeyHint="go"
             value={note}
             onChange={(e) => setNote(e.target.value.replace(/\n/g, ' '))}
             onKeyDown={onKey}
           />
+          </div>
         </div>
 
         <div className="capture__foot">
           <button type="button" className="capture__secondary" disabled={!has} onClick={() => submit(false)}>
-            ADD WITHOUT STARTING <kbd>⇧⏎</kbd>
+            <kbd>[⇧⏎]</kbd> ADD WITHOUT STARTING
           </button>
           <button type="button" className="capture__start" disabled={!has} onClick={() => submit(true)}>
-            <span className="g-play" aria-hidden="true" />
-            START <kbd>⏎</kbd>
+            <kbd>[⏎]</kbd> START
           </button>
         </div>
       </div>

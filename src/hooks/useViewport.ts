@@ -4,8 +4,8 @@ import { useSyncExternalStore } from 'react';
  * Layout modes, chosen by viewport width:
  *  rail   < 300   ultra-narrow persistent rail
  *  mobile < 600   compact / phone with filter tabs
- *  desk   < 1180  half-screen desktop rows; inspector as a drawer
- *  wide   ≥ 1180  full desktop; inspector docked beside the list
+ *  desk   < 1180  half-screen desktop rows
+ *  wide   ≥ 1180  full desktop rows
  */
 export type Mode = 'rail' | 'mobile' | 'desk' | 'wide';
 

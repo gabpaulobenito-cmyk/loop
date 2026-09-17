@@ -63,13 +63,15 @@ test('production lifecycle, persistence, timers and layouts', async ({ page }) =
     await expect(row).toBeVisible();
     expect(secs(await timer.innerText())).toBeGreaterThanOrEqual(before);
 
-    // Priority
-    await row.getByRole('button', { name: /Toggle priority/ }).click();
+    // Row opens details (without toggling); priority from the pop-up
+    await row.click();
+    const inspector = page.getByRole('dialog', { name: 'Loop details' });
+    await expect(inspector).toBeVisible();
+    await expect(row).toHaveAttribute('data-state', 'running');
+    await inspector.getByRole('button', { name: 'PRIORITY', exact: true }).click();
     await expect(row.locator('[data-marker="priority"]')).toBeVisible();
 
-    // Inspector + close running loop
-    await row.getByRole('button', { name: `Session detail for ${title}` }).click();
-    const inspector = page.getByRole('dialog', { name: 'Session detail' });
+    // Close the running loop from the pop-up
     await expect(inspector.getByRole('list', { name: 'Session history' }).locator('li')).toHaveCount(2);
     await inspector.getByRole('button', { name: /CLOSE LOOP/ }).click();
     await expect(inspector.getByRole('button', { name: /REOPEN/ }).first()).toBeVisible();

@@ -5,7 +5,6 @@ import type { Loop, Session } from '../../shared/types';
 import { api } from '../lib/api';
 import { Marker } from './Marker';
 
-export type InspectorVariant = 'panel' | 'drawer';
 
 export interface InspectorActions {
   toggle: (id: string) => void;
@@ -19,10 +18,9 @@ export interface InspectorActions {
 interface Props {
   loop: Loop | null;
   now: number;
-  variant: InspectorVariant;
   pending: boolean;
   keysEnabled: boolean;
-  onDismiss?: () => void;
+  onDismiss: () => void;
   actions: InspectorActions;
 }
 
@@ -57,7 +55,7 @@ function useSessions(loop: Loop | null) {
   return state && state.loopId === id ? state : null;
 }
 
-export function Inspector({ loop, now, variant, pending, keysEnabled, onDismiss, actions }: Props) {
+export function Inspector({ loop, now, pending, keysEnabled, onDismiss, actions }: Props) {
   const rootRef = useRef<HTMLElement>(null);
   const [editing, setEditing] = useState<'title' | 'note' | null>(null);
   const [draft, setDraft] = useState('');
@@ -80,13 +78,12 @@ export function Inspector({ loop, now, variant, pending, keysEnabled, onDismiss,
 
   useEffect(() => setEdit(null), [loop?.id]);
 
-  // Move focus into modal presentations so keyboard users land in the detail.
+  // Move focus into the pop-up so keyboard users land in the detail.
   useEffect(() => {
-    if (variant === 'panel') return;
     const prev = document.activeElement as HTMLElement | null;
     rootRef.current?.querySelector<HTMLElement>('[data-autofocus]')?.focus();
     return () => prev?.focus?.();
-  }, [variant]);
+  }, []);
 
   const beginEdit = (field: 'title' | 'note') => {
     if (!loop) return;
@@ -111,19 +108,18 @@ export function Inspector({ loop, now, variant, pending, keysEnabled, onDismiss,
       if (e.metaKey || e.ctrlKey || e.altKey || e.defaultPrevented) return;
       const t = e.target as HTMLElement;
       if (t.closest('input, textarea, [contenteditable="true"]')) return;
-      const within = variant !== 'panel' || !!rootRef.current?.contains(document.activeElement);
       const k = e.key.toLowerCase();
-      if (k === 's' && within) {
+      if (k === 's') {
         e.preventDefault();
         if (loop.state === 'closed') actions.reopen(loop.id);
         else actions.toggle(loop.id);
-      } else if (k === 'p' && within && loop.state !== 'closed') {
+      } else if (k === 'p' && loop.state !== 'closed') {
         e.preventDefault();
         actions.priority(loop.id);
-      } else if (k === 'e' && within) {
+      } else if (k === 'e') {
         e.preventDefault();
         beginEdit('title');
-      } else if ((e.key === 'Backspace' || e.key === 'Delete') && within && loop.state !== 'closed') {
+      } else if ((e.key === 'Backspace' || e.key === 'Delete') && loop.state !== 'closed') {
         e.preventDefault();
         actions.close(loop.id);
       }
@@ -132,17 +128,20 @@ export function Inspector({ loop, now, variant, pending, keysEnabled, onDismiss,
     return () => window.removeEventListener('keydown', onKey);
   });
 
-  const dismiss =
-    onDismiss && (
-      <button type="button" className="insp-btn insp-btn--ghost" aria-label="Close session detail" title="ESC" onClick={onDismiss} data-autofocus={loop ? undefined : true}>
-        ✕
-      </button>
-    );
+  const dismiss = (
+    <button type="button" className="term-bar__esc" aria-label="Close details" onClick={onDismiss} data-autofocus={loop ? undefined : true}>
+      ESC ✕
+    </button>
+  );
 
   if (!loop) {
     return (
       <section ref={rootRef} className="inspector" aria-label="Session detail">
-        {onDismiss && <div className="insp-head" style={{ justifyContent: 'flex-end' }}>{dismiss}</div>}
+        <div className="term-bar">
+          <span className="term-bar__path">LOOP // DETAILS</span>
+          <span className="hdr__spacer" />
+          {dismiss}
+        </div>
         <div className="insp-empty">
           NO LOOP SELECTED
           <br />
@@ -213,9 +212,18 @@ export function Inspector({ loop, now, variant, pending, keysEnabled, onDismiss,
   };
 
   return (
-    <section ref={rootRef} className="inspector" aria-label={`Session detail: ${loop.title}`} aria-busy={pending || undefined} data-inspector={loop.id}>
-      <div className="insp-head">
+    <section ref={rootRef} className="inspector" aria-label={`Details: ${loop.title}`} aria-busy={pending || undefined} data-inspector={loop.id}>
+      <div className="term-bar">
         <Marker loop={loop} />
+        <span className="term-bar__path">
+          <span className="term-bar__prefix">LOOP // </span>
+          <span className={`term-bar__state term-bar__state--${loop.state}`}>{loop.state.toUpperCase()}</span>
+          {loop.priority && <span className="term-bar__prio"> · PRIORITY</span>}
+        </span>
+        <span className="hdr__spacer" />
+        {dismiss}
+      </div>
+      <div className="insp-head">
         <div className="insp-head__text">
           {editing === 'title' ? (
             <input
@@ -270,7 +278,6 @@ export function Inspector({ loop, now, variant, pending, keysEnabled, onDismiss,
             {running ? '■ STOP' : '▶ START'}
           </button>
         )}
-        {dismiss}
       </div>
 
       <div className="insp-actions" role="group" aria-label="Loop actions">

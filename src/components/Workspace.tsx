@@ -84,16 +84,7 @@ export function Workspace() {
   const longest = allRunning.reduce((a, l) => Math.max(a, elapsedMs(l, now)), 0);
 
   const selected = s.loops.find((l) => l.id === selectedId) ?? null;
-  const inspectorVisible = mode === 'wide' || (overlay && !!selected);
-
-  // Wide mode docks the inspector: keep something useful selected.
-  useEffect(() => {
-    if (mode !== 'wide' || s.load !== 'ready') return;
-    if (selectedId && s.loops.some((l) => l.id === selectedId)) return;
-    const first = sortRunning(allRunning, settings.runSort, now)[0] ?? sortOpen(allOpen, settings.openSort)[0];
-    setSelectedId(first?.id ?? null);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode, s.load, s.loops, selectedId]);
+  const inspectorVisible = overlay && !!selected;
 
   // Close the overlay if its loop disappears (e.g. undoing its creation).
   useEffect(() => {
@@ -105,7 +96,6 @@ export function Workspace() {
     () => ({
       toggle: (id) => void store.toggle(id),
       reopen: (id) => void store.reopen(id),
-      priority: (id) => void store.togglePriority(id),
       inspect: (id) => {
         setSelectedId(id);
         setOverlay(true);
@@ -160,7 +150,7 @@ export function Workspace() {
       if (e.key === 'Escape') {
         if (menuOpen) return setMenuOpen(false);
         if (captureOpen) return setCaptureOpen(false);
-        if (overlay && mode !== 'wide') return setOverlay(false);
+        if (overlay) return setOverlay(false);
         if (compact && searchOpen && !query) return setSearchOpen(false);
         return;
       }
@@ -431,7 +421,7 @@ export function Workspace() {
         {dismissNotice}
         <span className="status__spacer" />
         {undoBtn('desk')}
-        <span className="status__hint">ROW ⇄ START/STOP · TITLE ⇄ PRIORITY</span>
+        <span className="status__hint">ROW → DETAILS · ▶ ■ → START/STOP</span>
       </footer>
     );
   }
@@ -525,11 +515,10 @@ export function Workspace() {
     />
   );
 
-  const inspectorFor = (variant: 'panel' | 'drawer', onDismiss?: () => void) => (
+  const inspectorFor = (onDismiss: () => void) => (
     <Inspector
       loop={selected}
       now={now}
-      variant={variant}
       pending={selected ? !!s.pending[selected.id] : false}
       keysEnabled={!captureOpen && !menuOpen}
       onDismiss={onDismiss}
@@ -574,15 +563,14 @@ export function Workspace() {
         <main className="list" aria-label="Loops">
           {listContent}
         </main>
-        {mode === 'wide' && <aside className="insp-pane">{inspectorFor('panel')}</aside>}
       </div>
       {statusBar}
 
-      {mode !== 'wide' && overlay && selected && (
+      {overlay && selected && (
         <>
-          <div className="scrim" onClick={() => setOverlay(false)} />
-          <div className={`insp-drawer insp-drawer--${mode}`} role="dialog" aria-modal="true" aria-label="Session detail">
-            {inspectorFor('drawer', () => setOverlay(false))}
+          <div className="scrim scrim--modal" onClick={() => setOverlay(false)} />
+          <div className="insp-modal" role="dialog" aria-modal="true" aria-label="Loop details">
+            {inspectorFor(() => setOverlay(false))}
           </div>
         </>
       )}

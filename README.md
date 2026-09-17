@@ -6,7 +6,7 @@ A lightweight personal **open-loops** tracker. It answers one question:
 
 Every loop is **RUNNING** (a session is accumulating time), **OPEN** (unresolved, timer stopped) or **CLOSED** (done, out of the workspace). There are no projects, boards, subtasks or due dates.
 
-The interface is a production translation of the *Loop V2* design studies: a dark command-center UI with Geist / Geist Mono / Saira Condensed, acid-lime running states, neon-red priority markers, and tight technical rows that adapt from a 180 px persistent rail up to a full desktop with a docked session inspector.
+The interface is a production translation of the *Loop V2* design studies: a dark command-center UI with Geist / Geist Mono / Saira Condensed, acid-lime running states, neon-red priority markers, and tight technical rows that adapt from a 180 px persistent rail up to a full desktop. Pop-ups use a terminal style with square corners.
 
 ---
 
@@ -61,19 +61,18 @@ Every state change runs in a transaction holding a row lock (`SELECT … FOR UPD
 
 Reversible actions (create, start/resume, stop, close, reopen, priority, rename, note edits) go into `action_history` with a snapshot of the loop and the session they created or finished. `POST /api/undo` reverts the most recent action from the last 30 minutes, including reopening a finished session or deleting a just-started one. The undo stack is server-side, so it is consistent across devices.
 
-## Interaction model (from V2)
+## Interaction model
 
 | Where | Action |
 | ----- | ------ |
-| Row | Start / stop (**ROW ⇄ START/STOP**) |
-| Title | Toggle priority (**TITLE ⇄ PRIORITY**) |
-| Timer / age | Open the session inspector |
-| ▶ / ■ / ↺ button | Start, stop, or reopen (never triggers the row) |
-| Inspector | Start/stop, **CLOSE LOOP**, PRIORITY, RENAME, NOTE, full session history |
+| Row | Opens the loop's details pop-up. Never changes its state. |
+| ▶ / ■ / ↺ button | Start, stop, or reopen. This is the only way a row changes state. |
+| + / NEW LOOP / `N` | New-loop pop-up: large title and note. `⏎` creates and starts, `⇧⏎` adds without starting. |
+| Details pop-up | Start/stop, **CLOSE LOOP**, PRIORITY, RENAME, NOTE, DELETE (two clicks), full session history |
 
-Closing only happens from the inspector, so it can't be triggered by a stray tap on a row, and it can always be undone.
+Closing and deleting only happen inside the details pop-up, so a stray tap on a row can't trigger them. Both can be undone.
 
-Keyboard: `N` / `⌘N` new loop · `⏎` create open · `⇧⏎` create + start · `Title // note` adds a context note · `/` or `⌘K` search · `⌘Z` undo · `↑ ↓` move between rows · `Esc` dismiss. In the inspector: `S` start/stop, `P` priority, `E` rename, `⌫` close.
+Keyboard: `N` / `⌘N` new loop · `/` or `⌘K` search · `⌘Z` undo · `↑ ↓` move between rows · `Esc` dismiss. In details: `S` start/stop, `P` priority, `E` rename, `⌫` close.
 
 ### Layout modes
 
@@ -81,8 +80,7 @@ Keyboard: `N` / `⌘N` new loop · `⏎` create open · `⇧⏎` create + start 
 | ----- | ---- |
 | < 300 px | **Rail**: compressed header, RUNNING / OPEN sections, compact timers, notes under titles |
 | 300–599 px | **Mobile**: ALL / RUNNING / OPEN / CLOSED tabs, 30 px touch controls, safe-area insets |
-| 600–1179 px | **Desk**: V2 half-screen rows (44 px running / 38 px open), inline capture, inspector drawer |
-| ≥ 1180 px | **Wide**: desk rows plus a docked session inspector |
+| ≥ 600 px | **Desk**: V2 half-screen rows (44 px running / 38 px open) plus an inline capture bar |
 
 Overflowing notes pan slowly as in V2, pause on hover or focus, and fall back to an ellipsis under `prefers-reduced-motion` (which also stops the running-marker pulse).
 

@@ -49,38 +49,3 @@ export function ToggleButton({ loop, size = 'md', disabled, onToggle, onReopen }
     </button>
   );
 }
-
-/** Vertical three-dot button that opens a loop's detail drawer (rename, note, delete…). */
-export function MoreButton({
-  title,
-  size,
-  expanded,
-  onOpen,
-}: {
-  title: string;
-  size: Size;
-  expanded: boolean;
-  onOpen: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      className={`mbtn mbtn--${size}`}
-      data-ctl="more"
-      title="DETAILS"
-      aria-label={`Details for ${title}`}
-      aria-haspopup="dialog"
-      aria-expanded={expanded}
-      onClick={(e) => {
-        e.stopPropagation();
-        onOpen();
-      }}
-    >
-      <svg viewBox="0 0 4 14" aria-hidden="true" focusable="false">
-        <circle cx="2" cy="2" r="1.35" />
-        <circle cx="2" cy="7" r="1.35" />
-        <circle cx="2" cy="12" r="1.35" />
-      </svg>
-    </button>
-  );
-}
