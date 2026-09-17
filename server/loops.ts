@@ -8,12 +8,13 @@ import {
   UNDO_WINDOW_MS,
   type Loop,
   type LoopState,
+  type Owner,
   type Session,
   type Settings,
   type UndoTop,
 } from '../shared/types';
 
-type ActionKind = 'create' | 'start' | 'stop' | 'close' | 'reopen' | 'priority' | 'edit' | 'delete' | 'retime';
+type ActionKind = 'create' | 'start' | 'stop' | 'close' | 'reopen' | 'priority' | 'edit' | 'delete' | 'retime' | 'handoff';
 
 interface LoopRow {
   id: string;
@@ -28,6 +29,10 @@ interface LoopRow {
   version: number;
   updated_at: Date;
   deleted_at: Date | null;
+  owner: Owner;
+  owner_with: string;
+  handed_off_at: Date | null;
+  follow_up_at: Date | null;
   session_count?: number;
 }
 
@@ -43,6 +48,11 @@ interface Snapshot {
   version: number;
   /** Present on snapshots taken after created time became editable. */
   createdAt?: number;
+  /** Present on snapshots taken after ownership was added. */
+  owner?: Owner;
+  ownerWith?: string;
+  handedOffAt?: number | null;
+  followUpAt?: number | null;
   /** Original start of a session moved by a retime action. */
   sessionStart?: { id: string; startedAt: number };
   /** Earlier sessions a backdated running session absorbed (restored on undo). */
@@ -69,6 +79,10 @@ function toLoop(r: LoopRow): Loop {
     accumulatedMs: Number(r.accumulated_ms),
     sessionCount: r.session_count ?? 0,
     updatedAt: r.updated_at.getTime(),
+    owner: r.owner,
+    ownerWith: r.owner_with,
+    handedOffAt: ms(r.handed_off_at),
+    followUpAt: ms(r.follow_up_at),
   };
 }
 
@@ -83,6 +97,10 @@ function snapshot(r: LoopRow): Snapshot {
     accumulatedMs: Number(r.accumulated_ms),
     version: r.version,
     createdAt: r.created_at.getTime(),
+    owner: r.owner,
+    ownerWith: r.owner_with,
+    handedOffAt: ms(r.handed_off_at),
+    followUpAt: ms(r.follow_up_at),
   };
 }
 
@@ -295,27 +313,61 @@ export function reopenLoop(pool: Pool, id: string, now: number) {
   });
 }
 
-export function updateLoop(
-  pool: Pool,
-  id: string,
-  patch: { title?: string; note?: string; priority?: boolean },
-  now: number,
-) {
+export interface LoopPatch {
+  title?: string;
+  note?: string;
+  priority?: boolean;
+  owner?: Owner;
+  ownerWith?: string;
+  followUpAt?: number | null;
+}
+
+export function updateLoop(pool: Pool, id: string, patch: LoopPatch, now: number) {
   return mutate(pool, id, now, async (c, row) => {
     const title = patch.title ?? row.title;
     const note = patch.note ?? row.note;
     const priority = patch.priority ?? row.priority;
+
+    // Ball in court. Going back to `mine` clears who it's with and the follow-up.
+    const owner: Owner = patch.owner ?? row.owner;
+    const mine = owner === 'mine';
+    const ownerWith = mine ? '' : (patch.ownerWith ?? row.owner_with);
+    const handedOffAt = mine ? null : row.owner === 'mine' ? now : row.handed_off_at!.getTime();
+    const followUpAt = mine ? null : patch.followUpAt !== undefined ? patch.followUpAt : ms(row.follow_up_at);
+
     const priorityChanged = priority !== row.priority;
     const textChanged = title !== row.title || note !== row.note;
-    if (!priorityChanged && !textChanged) return null;
+    const ownerChanged = owner !== row.owner;
+    const withChanged = ownerWith !== row.owner_with;
+    const followChanged = followUpAt !== ms(row.follow_up_at);
+    const handoffChanged = ownerChanged || withChanged || followChanged;
+    if (!priorityChanged && !textChanged && !handoffChanged) return null;
+
     await c.query(
-      `UPDATE loops SET title = $2, note = $3, priority = $4, version = version + 1, updated_at = $5 WHERE id = $1`,
-      [id, title, note, priority, new Date(now)],
+      `UPDATE loops SET title = $2, note = $3, priority = $4, owner = $5, owner_with = $6, handed_off_at = $7,
+         follow_up_at = $8, version = version + 1, updated_at = $9 WHERE id = $1`,
+      [id, title, note, priority, owner, ownerWith, at(handedOffAt), at(followUpAt), new Date(now)],
     );
-    if (priorityChanged && !textChanged) {
+
+    if (handoffChanged && !priorityChanged && !textChanged) {
+      const who = ownerWith ? ` ${ownerWith}` : '';
+      let label: string;
+      if (ownerChanged && owner === 'mine') label = `Took back ${quote(title)}`;
+      else if (ownerChanged && owner === 'delegated') label = `Delegated ${quote(title)}${who ? ` to${who}` : ''}`;
+      else if (ownerChanged && owner === 'waiting') label = `Waiting on${who || ' others'} for ${quote(title)}`;
+      else if (withChanged) label = `${owner === 'delegated' ? 'Delegated' : 'Waiting on'} ${quote(title)}${who ? ` · ${ownerWith}` : ''}`;
+      else label = `${followUpAt == null ? 'Cleared follow-up on' : 'Set follow-up on'} ${quote(title)}`;
+      return { kind: 'handoff', label };
+    }
+    if (priorityChanged && !textChanged && !handoffChanged) {
       return { kind: 'priority', label: `${priority ? 'Flagged' : 'Cleared priority on'} ${quote(title)}` };
     }
-    const what = title !== row.title && note !== row.note ? 'Edited' : title !== row.title ? 'Renamed' : 'Edited note on';
+    const what =
+      handoffChanged || priorityChanged || (title !== row.title && note !== row.note)
+        ? 'Edited'
+        : title !== row.title
+          ? 'Renamed'
+          : 'Edited note on';
     return { kind: 'edit', label: `${what} ${quote(title)}` };
   });
 }
@@ -478,6 +530,12 @@ export async function undoLast(pool: Pool, now: number): Promise<MutationResult>
     }
     if (b.createdAt != null) {
       await c.query('UPDATE loops SET created_at = $2 WHERE id = $1', [h.loop_id, new Date(b.createdAt)]);
+    }
+    if (b.owner !== undefined) {
+      await c.query(
+        'UPDATE loops SET owner = $2, owner_with = $3, handed_off_at = $4, follow_up_at = $5 WHERE id = $1',
+        [h.loop_id, b.owner, b.ownerWith ?? '', at(b.handedOffAt ?? null), at(b.followUpAt ?? null)],
+      );
     }
     if (h.session_started_id) {
       await c.query('DELETE FROM loop_sessions WHERE id = $1', [h.session_started_id]);

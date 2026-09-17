@@ -5,8 +5,10 @@ import {
   DEFAULT_SETTINGS,
   NOTE_MAX,
   TITLE_MAX,
+  WITH_MAX,
   type Loop,
   type LoopMutationResponse,
+  type Owner,
   type Settings,
   type StateResponse,
   type UndoTop,
@@ -44,6 +46,18 @@ function cachedTheme(): Settings['theme'] {
 }
 
 const POLL_MS = 20_000;
+
+/** Fill fields an older server may not send yet, so the UI never sees undefined. */
+function normalizeLoop(l: Loop): Loop {
+  return {
+    ...l,
+    note: l.note ?? '',
+    owner: l.owner ?? 'mine',
+    ownerWith: l.ownerWith ?? '',
+    handedOffAt: l.handedOffAt ?? null,
+    followUpAt: l.followUpAt ?? null,
+  };
+}
 const DOUBLE_TAP_MS = 350;
 
 export class LoopStore {
@@ -153,7 +167,11 @@ export class LoopStore {
   }
 
   private applyState(s: StateResponse) {
-    this.set({ loops: s.loops.filter((l) => !this.removed.has(l.id)), settings: s.settings, undo: s.undo });
+    this.set({
+      loops: s.loops.filter((l) => !this.removed.has(l.id)).map(normalizeLoop),
+      settings: { ...DEFAULT_SETTINGS, ...s.settings },
+      undo: s.undo,
+    });
     this.cacheTheme(s.settings.theme);
   }
 
@@ -183,8 +201,9 @@ export class LoopStore {
   /** Loops removed locally; late responses for them must not bring them back. */
   private removed = new Set<string>();
 
-  private replaceLoop(loop: Loop) {
-    if (this.removed.has(loop.id)) return;
+  private replaceLoop(raw: Loop) {
+    if (this.removed.has(raw.id)) return;
+    const loop = normalizeLoop(raw);
     const exists = this.state.loops.some((l) => l.id === loop.id);
     this.set({
       loops: exists ? this.state.loops.map((l) => (l.id === loop.id ? loop : l)) : [loop, ...this.state.loops],
@@ -252,7 +271,7 @@ export class LoopStore {
       try {
         const r = await call();
         q.ops.shift();
-        if (r.loop) q.base = r.loop;
+        if (r.loop) q.base = normalizeLoop(r.loop);
         this.set({ undo: r.undo });
         this.render(id);
         return true;
@@ -306,6 +325,10 @@ export class LoopStore {
       accumulatedMs: 0,
       sessionCount: start ? 1 : 0,
       updatedAt: now,
+      owner: 'mine',
+      ownerWith: '',
+      handedOffAt: null,
+      followUpAt: null,
     };
     this.set({ loops: [optimistic, ...this.state.loops] });
     const q = this.queueFor(id);
@@ -419,6 +442,29 @@ export class LoopStore {
     );
   }
 
+  /** Ball in court: who's moving it, who it's with, and when to follow up. */
+  handoff(id: string, patch: { owner?: Owner; ownerWith?: string; followUpAt?: number | null }) {
+    const body: { owner?: Owner; ownerWith?: string; followUpAt?: number | null } = { ...patch };
+    if (body.ownerWith !== undefined) body.ownerWith = body.ownerWith.replace(/\s+/g, ' ').trim().slice(0, WITH_MAX);
+    const now = serverNow();
+    return this.mutate(
+      id,
+      (l) => {
+        const owner = body.owner ?? l.owner;
+        if (owner === 'mine') return { ...l, owner, ownerWith: '', handedOffAt: null, followUpAt: null };
+        return {
+          ...l,
+          owner,
+          ownerWith: body.ownerWith ?? l.ownerWith,
+          handedOffAt: l.owner === 'mine' ? now : l.handedOffAt,
+          followUpAt: body.followUpAt !== undefined ? body.followUpAt : l.followUpAt,
+        };
+      },
+      () => api<LoopMutationResponse>(`/loops/${id}`, { method: 'PATCH', body }),
+      'update who has it',
+    );
+  }
+
   /** Move when a loop started: the running session's start, or when it was opened. */
   retime(id: string, startedAt: number, predictedAccumulatedMs?: number) {
     return this.mutate(
@@ -485,7 +531,7 @@ export class LoopStore {
     if (patch.theme) this.cacheTheme(patch.theme);
     try {
       const r = await api<{ settings: Settings }>('/settings', { method: 'PUT', body: patch });
-      this.set({ settings: r.settings });
+      this.set({ settings: { ...DEFAULT_SETTINGS, ...r.settings } });
     } catch (err) {
       // Keep the local choice for this session; it simply won't sync.
       if (err instanceof ApiError && err.status !== 0) {

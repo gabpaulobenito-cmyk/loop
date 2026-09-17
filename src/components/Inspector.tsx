@@ -5,6 +5,7 @@ import type { Loop, Session } from '../../shared/types';
 import { api } from '../lib/api';
 import { Marker } from './Marker';
 import { StartEditor } from './StartEditor';
+import { OwnerPanel, type HandoffPatch } from './OwnerPanel';
 import { TimerText } from './TimerText';
 
 
@@ -16,6 +17,7 @@ export interface InspectorActions {
   edit: (id: string, patch: { title?: string; note?: string }) => Promise<boolean>;
   remove: (id: string) => void;
   retime: (id: string, startedAt: number, predictedAccumulatedMs?: number) => void;
+  handoff: (id: string, patch: HandoffPatch) => void;
 }
 
 interface Props {
@@ -237,6 +239,13 @@ export function Inspector({ loop, now, pending, keysEnabled, onDismiss, actions 
           <span className="term-bar__prefix">LOOP // </span>
           <span className={`term-bar__state term-bar__state--${loop.state}`}>{loop.state.toUpperCase()}</span>
           {loop.priority && <span className="term-bar__prio"> · PRIORITY</span>}
+          {loop.owner !== 'mine' && (
+            <span className="term-bar__owner" data-owner={loop.owner}>
+              {' · '}
+              {loop.owner === 'delegated' ? '→ ' : '⧗ '}
+              {loop.ownerWith || loop.owner.toUpperCase()}
+            </span>
+          )}
         </span>
         <span className="hdr__spacer" />
         {dismiss}
@@ -329,6 +338,8 @@ export function Inspector({ loop, now, pending, keysEnabled, onDismiss, actions 
         </div>
       ) : (
         <>
+          <OwnerPanel loop={loop} now={now} onChange={(patch) => actions.handoff(loop.id, patch)} />
+
       <div className="insp-stats">
         {stats.map((s) => (
           <div key={s.label} className="insp-stat">

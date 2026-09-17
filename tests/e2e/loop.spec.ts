@@ -380,6 +380,96 @@ test.describe('edit start time', () => {
   });
 });
 
+test.describe('ball in court', () => {
+  for (const width of [1280, 393, 220]) {
+    test(`delegate, follow up, filter and take back at ${width}px`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 900 });
+      await login(page);
+      await resetData(page.request);
+      const mine = `Mine ${width} ${Date.now()}`;
+      const title = `Delegate ${width} ${Date.now()}`;
+      await page.request.post('/api/loops', { headers: H, data: { id: crypto.randomUUID(), title: mine } });
+      await page.request.post('/api/loops', { headers: H, data: { id: crypto.randomUUID(), title, start: true } });
+      await page.request.put('/api/settings', { headers: H, data: { ownerFilter: 'all' } });
+      await page.reload();
+
+      const row = page.locator('[data-row]', { hasText: title });
+      await expect(row).toHaveAttribute('data-owner', 'mine');
+      await row.click({ position: { x: 4, y: 4 } });
+      const dialog = page.getByRole('dialog', { name: 'Loop details' });
+      const panel = dialog.getByRole('group', { name: 'Ball in court' });
+      await expect(panel.getByRole('radio', { name: 'MINE' })).toHaveAttribute('aria-checked', 'true');
+
+      // Delegate: the name field is focused right away.
+      await panel.getByRole('radio', { name: /DELEGATED/ }).click();
+      const withInput = panel.locator('#own-with');
+      await expect(withInput).toBeFocused();
+      await withInput.fill('JG');
+      await withInput.press('Enter');
+      // Escape cancels an edit instead of saving it.
+      await withInput.fill('Someone else');
+      await withInput.press('Escape');
+      await expect(withInput).toHaveValue('JG');
+      await panel.getByRole('button', { name: 'TOMORROW' }).click();
+      await expect(panel.getByRole('status')).toContainText('TOMORROW');
+      await expect(panel).toContainText('OUT');
+
+      await page.keyboard.press('Escape');
+      await expect(row).toHaveAttribute('data-owner', 'delegated');
+      await expect(row.locator('.row__owner')).toContainText('JG');
+      await expect(row.locator('.row__out')).toBeVisible();
+      // Timer state is untouched by handing off.
+      await expect(row).toHaveAttribute('data-state', 'running');
+
+      // Persisted
+      await expect
+        .poll(async () => {
+          const st = await (await page.request.get('/api/state', { headers: H })).json();
+          const l = st.loops.find((x: { title: string }) => x.title === title);
+          return [l.owner, l.ownerWith, l.followUpAt != null];
+        })
+        .toEqual(['delegated', 'JG', true]);
+      await page.reload();
+      await expect(row).toHaveAttribute('data-owner', 'delegated');
+
+      // OUT filter shows only out-of-hands loops; MINE hides them.
+      const view = page.getByRole('group', { name: 'Filter by who is moving it' });
+      await view.getByRole('button', { name: /^OUT/ }).click();
+      await expect(row).toBeVisible();
+      await expect(page.locator('[data-row]', { hasText: mine })).toHaveCount(0);
+      await view.getByRole('button', { name: /^MINE/ }).click();
+      await expect(row).toHaveCount(0);
+      await expect(page.locator('[data-row]', { hasText: mine })).toBeVisible();
+      await view.getByRole('button', { name: /^ALL/ }).click();
+
+      // Take it back.
+      await row.click({ position: { x: 4, y: 4 } });
+      await panel.getByRole('radio', { name: 'MINE' }).click();
+      await page.keyboard.press('Escape');
+      await expect(row).toHaveAttribute('data-owner', 'mine');
+      await expect(row.locator('.row__owner')).toHaveCount(0);
+    });
+  }
+
+  test('overdue follow-ups brighten the row and show DUE', async ({ page }) => {
+    await page.setViewportSize({ width: 1024, height: 800 });
+    await login(page);
+    await resetData(page.request);
+    const title = `Overdue ${Date.now()}`;
+    const id = crypto.randomUUID();
+    await page.request.post('/api/loops', { headers: H, data: { id, title } });
+    await page.request.patch(`/api/loops/${id}`, {
+      headers: H,
+      data: { owner: 'waiting', ownerWith: 'Mike Bell', followUpAt: Date.now() - 86_400_000 },
+    });
+    await page.reload();
+    const row = page.locator('[data-row]', { hasText: title });
+    await expect(row).toHaveClass(/is-due/);
+    await expect(row.locator('.row__owner')).toContainText('DUE');
+    await expect(page.getByRole('group', { name: 'Filter by who is moving it' })).toContainText('1 DUE');
+  });
+});
+
 test.describe('slow network', () => {
   test.use({ viewport: { width: 1024, height: 800 } });
 

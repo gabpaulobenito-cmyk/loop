@@ -7,7 +7,7 @@ import { z } from 'zod';
 import type { Pool } from './db';
 import { HttpError } from './errors';
 import * as loops from './loops';
-import { NOTE_MAX, TITLE_MAX, type LoopMutationResponse } from '../shared/types';
+import { NOTE_MAX, TITLE_MAX, WITH_MAX, type LoopMutationResponse } from '../shared/types';
 
 export interface AppOptions {
   pool: Pool;
@@ -34,10 +34,27 @@ const createSchema = z.object({
   note: note.optional().default(''),
   start: z.boolean().optional().default(false),
 });
+const TEN_YEARS = 10 * 365 * 86_400_000;
+const ownerWith = z
+  .string()
+  .transform(cleanLine)
+  .pipe(z.string().max(WITH_MAX, `Name must be ${WITH_MAX} characters or fewer`));
 const patchSchema = z
-  .object({ title: title.optional(), note: note.optional(), priority: z.boolean().optional() })
+  .object({
+    title: title.optional(),
+    note: note.optional(),
+    priority: z.boolean().optional(),
+    owner: z.enum(['mine', 'delegated', 'waiting']).optional(),
+    ownerWith: ownerWith.optional(),
+    followUpAt: z
+      .number()
+      .int()
+      .refine((t) => Math.abs(t - Date.now()) < TEN_YEARS, 'Follow-up date is out of range')
+      .nullable()
+      .optional(),
+  })
   .strict()
-  .refine((v) => v.title !== undefined || v.note !== undefined || v.priority !== undefined, 'Nothing to update');
+  .refine((v) => Object.values(v).some((x) => x !== undefined), 'Nothing to update');
 const settingsSchema = z
   .object({
     runSort: z.enum(['longest', 'shortest', 'alpha']).optional(),
@@ -45,6 +62,7 @@ const settingsSchema = z
     archiveOpen: z.boolean().optional(),
     archiveRange: z.enum(['7d', 'all']).optional(),
     theme: z.enum(['dark', 'light', 'system']).optional(),
+    ownerFilter: z.enum(['all', 'mine', 'out']).optional(),
   })
   .strict();
 const idParam = z.uuid();

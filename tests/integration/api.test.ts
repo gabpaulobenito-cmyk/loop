@@ -212,6 +212,63 @@ describe('priority and edits', () => {
   });
 });
 
+describe('ball in court (delegated / waiting)', () => {
+  it('new loops are mine', async () => {
+    const l = await create('Mine by default');
+    expect(l).toMatchObject({ owner: 'mine', ownerWith: '', handedOffAt: null, followUpAt: null });
+  });
+
+  it('delegates with a name and follow-up, keeps the handoff time when switching to waiting, and takes it back', async () => {
+    const l = await create('BD Hire', { start: true });
+    clock.advance(M);
+    const followUp = clock.now() + 3 * 24 * H;
+    let r = await patch(`/api/loops/${l.id}`, { owner: 'delegated', ownerWith: '  JG  ', followUpAt: followUp }).expect(200);
+    expect(r.body.loop).toMatchObject({ owner: 'delegated', ownerWith: 'JG', handedOffAt: clock.now(), followUpAt: followUp, state: 'running' });
+    expect(r.body.undo.label).toBe('Delegated BD Hire to JG');
+    const handedOff = clock.now();
+
+    clock.advance(2 * H);
+    r = await patch(`/api/loops/${l.id}`, { owner: 'waiting', ownerWith: 'Recruiter' }).expect(200);
+    expect(r.body.loop).toMatchObject({ owner: 'waiting', ownerWith: 'Recruiter', handedOffAt: handedOff, followUpAt: followUp });
+    expect(r.body.undo.label).toBe('Waiting on Recruiter for BD Hire');
+
+    r = await patch(`/api/loops/${l.id}`, { followUpAt: null }).expect(200);
+    expect(r.body.loop.followUpAt).toBeNull();
+    expect(r.body.undo.label).toBe('Cleared follow-up on BD Hire');
+
+    r = await patch(`/api/loops/${l.id}`, { owner: 'mine' }).expect(200);
+    expect(r.body.loop).toMatchObject({ owner: 'mine', ownerWith: '', handedOffAt: null, followUpAt: null });
+    expect(r.body.undo.label).toBe('Took back BD Hire');
+  });
+
+  it('undo restores ownership exactly', async () => {
+    const l = await create('Contract w/ Mike Bell');
+    const followUp = clock.now() + 24 * H;
+    await patch(`/api/loops/${l.id}`, { owner: 'waiting', ownerWith: 'Mike', followUpAt: followUp }).expect(200);
+    clock.advance(M);
+    await patch(`/api/loops/${l.id}`, { owner: 'mine' }).expect(200);
+    let u = await post('/api/undo').expect(200);
+    expect(u.body.loop).toMatchObject({ owner: 'waiting', ownerWith: 'Mike', followUpAt: followUp });
+    u = await post('/api/undo').expect(200);
+    expect(u.body.loop).toMatchObject({ owner: 'mine', ownerWith: '', handedOffAt: null, followUpAt: null });
+  });
+
+  it('validates owner, name length and follow-up date', async () => {
+    const l = await create('Validate owner');
+    await patch(`/api/loops/${l.id}`, { owner: 'boss' }).expect(400);
+    await patch(`/api/loops/${l.id}`, { owner: 'delegated', ownerWith: 'x'.repeat(61) }).expect(400);
+    await patch(`/api/loops/${l.id}`, { followUpAt: 'friday' }).expect(400);
+    await patch(`/api/loops/${l.id}`, { followUpAt: Date.now() + 20 * 365 * 24 * H }).expect(400);
+  });
+
+  it('persists the owner filter setting', async () => {
+    await agent.put('/api/settings').set('x-loop-client', '1').send({ ownerFilter: 'out' }).expect(200);
+    const s = await agent.get('/api/state').expect(200);
+    expect(s.body.settings.ownerFilter).toBe('out');
+    await agent.put('/api/settings').set('x-loop-client', '1').send({ ownerFilter: 'team' }).expect(400);
+  });
+});
+
 describe('edit start time', () => {
   const retime = (id: string, startedAt: number) => post(`/api/loops/${id}/retime`, { startedAt });
 

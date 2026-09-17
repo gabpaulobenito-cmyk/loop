@@ -1,5 +1,8 @@
 export type LoopState = 'running' | 'open' | 'closed';
 
+/** Ball in court: who is moving the loop forward. */
+export type Owner = 'mine' | 'delegated' | 'waiting';
+
 /** Wire format for a loop. All timestamps are epoch milliseconds (server clock). */
 export interface Loop {
   id: string;
@@ -15,6 +18,13 @@ export interface Loop {
   accumulatedMs: number;
   sessionCount: number;
   updatedAt: number;
+  owner: Owner;
+  /** Who it's with (delegated to / waiting on). Empty for `mine`. */
+  ownerWith: string;
+  /** When it left your hands; null for `mine`. */
+  handedOffAt: number | null;
+  /** When to check back; null when not set. */
+  followUpAt: number | null;
 }
 
 export interface Session {
@@ -28,6 +38,7 @@ export type RunSort = 'longest' | 'shortest' | 'alpha';
 export type OpenSort = 'oldest' | 'newest' | 'alpha';
 export type ThemePref = 'dark' | 'light' | 'system';
 export type ArchiveRange = '7d' | 'all';
+export type OwnerFilter = 'all' | 'mine' | 'out';
 
 export interface Settings {
   runSort: RunSort;
@@ -35,6 +46,7 @@ export interface Settings {
   archiveOpen: boolean;
   archiveRange: ArchiveRange;
   theme: ThemePref;
+  ownerFilter: OwnerFilter;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -43,6 +55,7 @@ export const DEFAULT_SETTINGS: Settings = {
   archiveOpen: false,
   archiveRange: '7d',
   theme: 'dark',
+  ownerFilter: 'all',
 };
 
 export interface UndoTop {
@@ -67,5 +80,6 @@ export interface LoopMutationResponse {
 
 export const TITLE_MAX = 140;
 export const NOTE_MAX = 280;
+export const WITH_MAX = 60;
 /** Actions older than this can no longer be undone. */
 export const UNDO_WINDOW_MS = 30 * 60 * 1000;

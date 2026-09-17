@@ -17,6 +17,10 @@ function loop(p: Partial<Loop> & { id: string }): Loop {
     accumulatedMs: 0,
     sessionCount: 0,
     updatedAt: 0,
+    owner: 'mine',
+    ownerWith: '',
+    handedOffAt: null,
+    followUpAt: null,
     ...p,
   };
 }

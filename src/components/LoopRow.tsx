@@ -57,11 +57,16 @@ function LoopRowImpl({ loop, variant, now, pending, selected, actions }: Props) 
     actions.inspect(id);
   };
 
+  // Ball in court: delegated / waiting loops are out of your hands.
+  const out = loop.owner !== 'mine' && !closed;
+  const due = out && loop.followUpAt != null && loop.followUpAt <= now;
+
   const cls = [
     'row',
     `row--${variant}`,
     `row--${state}`,
     selected ? 'is-selected' : '',
+    due ? 'is-due' : '',
   ].join(' ');
 
   const titleBtn = (
@@ -81,8 +86,26 @@ function LoopRowImpl({ loop, variant, now, pending, selected, actions }: Props) 
     </button>
   );
 
-  const timer = () => <TimerText className="row__timer" ms={total} />;
-  const ageLabel = <span className="row__age">{fmtAge(age)}</span>;
+  const ownerTag = out && (
+    <span
+      className="row__owner"
+      data-owner={loop.owner}
+      title={`${loop.owner === 'delegated' ? 'Delegated to' : 'Waiting on'} ${loop.ownerWith || '—'}${due ? ' · follow-up due' : ''}`}
+    >
+      <span aria-hidden="true">{loop.owner === 'delegated' ? '→' : '⧗'}</span>{' '}
+      {loop.ownerWith || (loop.owner === 'delegated' ? 'DELEGATED' : 'WAITING')}
+      {due && <span className="row__due"> · DUE</span>}
+    </span>
+  );
+  // Out-of-hands loops show how long they've been out instead of your own time.
+  const outClock = out && (
+    <span className="row__out" data-owner={loop.owner} title="Time since handed off">
+      <span className="row__outlabel">OUT</span>
+      <TimerText ms={now - (loop.handedOffAt ?? now)} />
+    </span>
+  );
+  const timer = () => (out ? outClock : <TimerText className="row__timer" ms={total} />);
+  const ageLabel = out ? outClock : <span className="row__age">{fmtAge(age)}</span>;
   const toggle = (size: 'xs' | 'sm' | 'md' | 'lg') => (
     <ToggleButton loop={loop} size={size} onToggle={() => actions.toggle(id)} onReopen={() => actions.reopen(id)} />
   );
@@ -92,6 +115,7 @@ function LoopRowImpl({ loop, variant, now, pending, selected, actions }: Props) 
     'data-state': state,
     'data-priority': priority ? 'true' : 'false',
     'data-age': state === 'open' ? ageLevel(age) : undefined,
+    'data-owner': loop.owner,
     'aria-busy': pending || undefined,
     onClick: onRowClick,
     onKeyDown: onRowKeyDown,
@@ -108,7 +132,14 @@ function LoopRowImpl({ loop, variant, now, pending, selected, actions }: Props) 
           {closed && <span className="row__closedat">{fmtAge(now - (loop.closedAt ?? now))}</span>}
           {toggle('xs')}
         </div>
-        {note && !closed && <Marquee className="row__note" text={note} />}
+        {out ? (
+          <div className="row__subline">
+            {ownerTag}
+            {note && <Marquee className="row__note" text={note} />}
+          </div>
+        ) : (
+          note && !closed && <Marquee className="row__note" text={note} />
+        )}
       </li>
     );
   }
@@ -119,7 +150,13 @@ function LoopRowImpl({ loop, variant, now, pending, selected, actions }: Props) 
         <Marker loop={loop} />
         <div className="row__body">
           {titleBtn}
-          {note && <span className="row__note">{note}</span>}
+          {(note || out) && (
+            <span className="row__note">
+              {ownerTag}
+              {out && note ? ' · ' : ''}
+              {note}
+            </span>
+          )}
         </div>
         {running && timer()}
         {state === 'open' && ageLabel}
@@ -147,6 +184,7 @@ function LoopRowImpl({ loop, variant, now, pending, selected, actions }: Props) 
       {titleBtn}
       {note && <span className="row__div" aria-hidden="true" />}
       {note ? <Marquee className="row__note" text={note} /> : <span className="row__note" />}
+      {ownerTag}
       <span className="row__div" aria-hidden="true" />
       {running ? (
         timer()
@@ -177,6 +215,7 @@ export const LoopRow = memo(LoopRowImpl, (a, b) => {
   ) {
     return false;
   }
-  if (a.loop.state === 'running') return a.now === b.now;
+  // Running timers and OUT clocks tick every second; the rest change once a minute.
+  if (a.loop.state === 'running' || (a.loop.owner !== 'mine' && a.loop.state !== 'closed')) return a.now === b.now;
   return Math.floor(a.now / 60_000) === Math.floor(b.now / 60_000);
 });

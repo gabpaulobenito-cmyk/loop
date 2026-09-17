@@ -71,6 +71,18 @@ Reversible actions (create, start/resume, stop, close, reopen, priority, rename,
 | Details pop-up | Start/stop, **CLOSE LOOP**, PRIORITY, RENAME, NOTE, **EDIT START**, DELETE (two clicks), full session history |
 | EDIT START | Calendar + time picker. On a running loop it moves the current session's start (the timer counts from then). On an open or closed loop it moves when the loop was opened. Moving a running start back past earlier sessions merges them into the running one, cutting any session that straddles the new start, so time is never double-counted. It can't be set in the future, and it can be undone, which restores the original sessions. |
 
+### Ball in court: Mine · Delegated · Waiting
+
+Separate from the timer state, every loop records **who is moving it**:
+
+| Owner | Meaning | Look |
+| ----- | ------- | ---- |
+| **MINE** | You act on it (default) | Unchanged |
+| **DELEGATED** | Handed to someone on your team; you monitor until done | Cyan left edge, `→ NAME` tag |
+| **WAITING** | Stuck on someone outside your control | Amber left edge, `⧗ NAME` tag |
+
+Set it in the details pop-up: pick the owner, type who it's with, and set a follow-up date (TOMORROW / 3 DAYS / NEXT WEEK or any date; follow-ups land at 09:00 local time). Out-of-hands loops show an `OUT` clock, ticking since they were handed off, instead of your own active time. When a follow-up date passes, the row brightens and shows `DUE`. The **VIEW** bar filters ALL / MINE / OUT with counts, and shows totals for delegated, waiting and due. Switching Delegated ↔ Waiting keeps the original handoff time; switching back to Mine clears the name and follow-up. Every change can be undone.
+
 Closing and deleting only happen inside the details pop-up, so a stray tap on a row can't trigger them. Both can be undone.
 
 Keyboard: `N` / `⌘N` new loop · `/` or `⌘K` search · `⌘Z` undo · `↑ ↓` move between rows · `Esc` dismiss. In details: `S` start/stop, `P` priority, `E` rename, `⌫` close.

@@ -67,12 +67,18 @@ export function Workspace() {
 
   // ── Derived lists ────────────────────────────────────────────────────────
   const q = query.trim().toLowerCase();
+  const { settings } = s;
+  const ownerFilter = settings.ownerFilter;
   const matches = useCallback(
-    (l: Loop) => !q || l.title.toLowerCase().includes(q) || l.note.toLowerCase().includes(q),
-    [q],
+    (l: Loop) =>
+      (ownerFilter === 'all' || (ownerFilter === 'mine' ? l.owner === 'mine' : l.owner !== 'mine')) &&
+      (!q ||
+        l.title.toLowerCase().includes(q) ||
+        l.note.toLowerCase().includes(q) ||
+        l.ownerWith.toLowerCase().includes(q)),
+    [q, ownerFilter],
   );
 
-  const { settings } = s;
   const allRunning = s.loops.filter((l) => l.state === 'running');
   const allOpen = s.loops.filter((l) => l.state === 'open');
   const running = sortRunning(allRunning.filter(matches), settings.runSort, now);
@@ -82,6 +88,18 @@ export function Workspace() {
   const prioCount = [...allRunning, ...allOpen].filter((l) => l.priority).length;
   const totalActive = [...allRunning, ...allOpen].reduce((a, l) => a + elapsedMs(l, now), 0);
   const longest = allRunning.reduce((a, l) => Math.max(a, elapsedMs(l, now)), 0);
+
+  // Ball-in-court counts across live (not closed) loops.
+  const live = [...allRunning, ...allOpen];
+  const outLoops = live.filter((l) => l.owner !== 'mine');
+  const ownerCounts = {
+    all: live.length,
+    mine: live.length - outLoops.length,
+    out: outLoops.length,
+    delegated: outLoops.filter((l) => l.owner === 'delegated').length,
+    waiting: outLoops.filter((l) => l.owner === 'waiting').length,
+    due: outLoops.filter((l) => l.followUpAt != null && l.followUpAt <= now).length,
+  };
 
   const selected = s.loops.find((l) => l.id === selectedId) ?? null;
   const inspectorVisible = overlay && !!selected;
@@ -113,6 +131,7 @@ export function Workspace() {
       priority: (id) => void store.togglePriority(id),
       edit: (id, patch) => store.edit(id, patch),
       retime: (id, at, kept) => void store.retime(id, at, kept),
+      handoff: (id, patch) => void store.handoff(id, patch),
       remove: (id) => {
         setOverlay(false);
         void store.remove(id);
@@ -516,6 +535,45 @@ export function Workspace() {
     />
   );
 
+  const viewBar = (
+    <div className={`viewbar viewbar--${mode}`} role="group" aria-label="Filter by who is moving it">
+      {mode !== 'rail' && <span className="viewbar__label">VIEW</span>}
+      {(
+        [
+          ['all', 'ALL', ownerCounts.all],
+          ['mine', 'MINE', ownerCounts.mine],
+          ['out', 'OUT', ownerCounts.out],
+        ] as const
+      ).map(([value, label, count]) => (
+        <button
+          key={value}
+          type="button"
+          className="viewbar__opt"
+          aria-pressed={ownerFilter === value}
+          onClick={() => void store.updateSettings({ ownerFilter: value })}
+        >
+          {label} <span className="viewbar__count">{pad2(count)}</span>
+        </button>
+      ))}
+      <span className="viewbar__spacer" />
+      {ownerCounts.delegated > 0 && (
+        <span className="viewbar__stat" data-owner="delegated" title="Delegated">
+          → {ownerCounts.delegated}
+        </span>
+      )}
+      {ownerCounts.waiting > 0 && (
+        <span className="viewbar__stat" data-owner="waiting" title="Waiting">
+          ⧗ {ownerCounts.waiting}
+        </span>
+      )}
+      {ownerCounts.due > 0 && (
+        <span className="viewbar__stat viewbar__stat--due" title="Follow-ups due">
+          {ownerCounts.due} DUE
+        </span>
+      )}
+    </div>
+  );
+
   const inspectorFor = (onDismiss: () => void) => (
     <Inspector
       loop={selected}
@@ -541,6 +599,7 @@ export function Workspace() {
         menuButtonRef={menuBtnRef}
       />
       {(mode === 'desk' || mode === 'wide') && <CaptureBar inputRef={captureRef} onCreate={createFromBar} />}
+      {(mode === 'desk' || mode === 'wide' || mode === 'rail') && viewBar}
       {compact && (searchOpen || q) && (
         <div className={`searchrow${mode === 'rail' ? ' searchrow--rail' : ''}`}>{searchField}</div>
       )}
@@ -560,6 +619,7 @@ export function Workspace() {
           ))}
         </div>
       )}
+      {mode === 'mobile' && viewBar}
       <div className="app__body">
         <main className="list" aria-label="Loops">
           {listContent}
