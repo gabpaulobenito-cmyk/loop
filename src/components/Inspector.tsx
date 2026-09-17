@@ -177,7 +177,7 @@ export function Inspector({ loop, now, variant, pending, keysEnabled, onDismiss,
   };
 
   return (
-    <section ref={rootRef} className="inspector" aria-label={`Session detail: ${loop.title}`} data-inspector={loop.id}>
+    <section ref={rootRef} className="inspector" aria-label={`Session detail: ${loop.title}`} aria-busy={pending || undefined} data-inspector={loop.id}>
       <div className="insp-head">
         <Marker loop={loop} />
         <div className="insp-head__text">
@@ -219,14 +219,14 @@ export function Inspector({ loop, now, variant, pending, keysEnabled, onDismiss,
           {fmtTimer(total)}
         </span>
         {closed ? (
-          <button type="button" className="insp-btn" disabled={pending} onClick={() => actions.reopen(loop.id)} data-autofocus>
+          <button type="button" className="insp-btn" onClick={() => actions.reopen(loop.id)} data-autofocus>
             ↺ REOPEN
           </button>
         ) : (
           <button
             type="button"
             className="insp-btn"
-            disabled={pending}
+           
             onClick={() => actions.toggle(loop.id)}
             aria-label={running ? `Stop ${loop.title}` : `Start ${loop.title}`}
             data-autofocus
@@ -283,14 +283,14 @@ export function Inspector({ loop, now, variant, pending, keysEnabled, onDismiss,
 
       <div className="insp-foot">
         {closed ? (
-          <button type="button" className="insp-foot__btn insp-foot__btn--main" disabled={pending} onClick={() => actions.reopen(loop.id)}>
+          <button type="button" className="insp-foot__btn insp-foot__btn--main" onClick={() => actions.reopen(loop.id)}>
             REOPEN LOOP ↺
           </button>
         ) : (
           <button
             type="button"
             className="insp-foot__btn insp-foot__btn--main"
-            disabled={pending}
+           
             onClick={() => actions.close(loop.id)}
             title={running ? 'Stops the running session, then closes' : 'Close this loop'}
           >
@@ -302,7 +302,7 @@ export function Inspector({ loop, now, variant, pending, keysEnabled, onDismiss,
             type="button"
             className="insp-foot__btn"
             aria-pressed={loop.priority}
-            disabled={pending}
+           
             onClick={() => actions.priority(loop.id)}
           >
             PRIORITY

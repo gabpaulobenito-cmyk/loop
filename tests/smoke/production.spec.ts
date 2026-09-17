@@ -21,7 +21,7 @@ test('production lifecycle, persistence, timers and layouts', async ({ page }) =
   page.on('console', (m) => m.type() === 'error' && consoleErrors.push(m.text()));
   page.on('pageerror', (e) => consoleErrors.push(e.message));
 
-  await page.setViewportSize({ width: 1280, height: 860 });
+  await page.setViewportSize({ width: 1024, height: 860 });
   await login(page);
 
   try {
@@ -48,12 +48,12 @@ test('production lifecycle, persistence, timers and layouts', async ({ page }) =
     console.log(`timer after refresh: ui=${await timer.innerText()} server=${serverElapsed}s`);
 
     // Stop
-    await page.getByRole('button', { name: `Stop ${title}` }).click();
+    await row.getByRole('button', { name: `Stop ${title}` }).click();
     const openRow = page.getByRole('list', { name: 'Open loops' }).locator('[data-row]', { hasText: title });
     await expect(openRow).toBeVisible();
 
     // Resume keeps accumulated time
-    await page.getByRole('button', { name: `Resume ${title}` }).click();
+    await openRow.getByRole('button', { name: `Resume ${title}` }).click();
     await expect(row).toBeVisible();
     expect(secs(await timer.innerText())).toBeGreaterThanOrEqual(before);
 
@@ -73,7 +73,7 @@ test('production lifecycle, persistence, timers and layouts', async ({ page }) =
     // Reopen from archive
     const archive = page.getByRole('button', { name: /CLOSED/ });
     if ((await archive.getAttribute('aria-expanded')) !== 'true') await archive.click();
-    await page.getByRole('button', { name: `Reopen ${title}` }).click();
+    await page.getByRole('list', { name: 'Closed loops' }).getByRole('button', { name: `Reopen ${title}` }).click();
     await expect(openRow).toBeVisible();
 
     // Persistence
@@ -84,7 +84,7 @@ test('production lifecycle, persistence, timers and layouts', async ({ page }) =
     // A second running loop for the layout checks.
     await capture.fill(`${TAG} Beta`);
     await capture.press('Shift+Enter');
-    await expect(page.getByRole('button', { name: `Stop ${TAG} Beta` })).toBeVisible();
+    await expect(page.locator('[data-row]', { hasText: `${TAG} Beta` }).getByRole('button', { name: `Stop ${TAG} Beta` })).toBeVisible();
 
     for (const width of WIDTHS) {
       await page.setViewportSize({ width, height: 860 });
@@ -105,7 +105,7 @@ test('production lifecycle, persistence, timers and layouts', async ({ page }) =
       expect(layout.overflow).toBeLessThanOrEqual(0);
       expect(layout.listOverflow).toBeLessThanOrEqual(0);
       expect(layout.badMarkers).toBe(0);
-      await expect(page.getByRole('button', { name: `Stop ${TAG} Beta` })).toBeVisible();
+      await expect(page.locator('[data-row]', { hasText: `${TAG} Beta` }).getByRole('button', { name: `Stop ${TAG} Beta` })).toBeVisible();
       await page.screenshot({ path: `test-results/smoke-${width}.png` });
     }
 

@@ -133,6 +133,39 @@ test.describe('core loop lifecycle (desktop)', () => {
   });
 });
 
+test.describe('slow network', () => {
+  test.use({ viewport: { width: 1024, height: 800 } });
+
+  test('rapid actions on one loop are queued, not dropped', async ({ page }) => {
+    await login(page);
+    await resetData(page.request);
+    const title = `Latency ${Date.now()}`;
+    await page.request.post('/api/loops', { headers: H, data: { id: crypto.randomUUID(), title } });
+    await page.reload();
+    // Every mutation takes 400 ms to reach the server.
+    await page.route('**/api/loops/**', async (route) => {
+      await new Promise((r) => setTimeout(r, 400));
+      await route.continue();
+    });
+
+    const row = page.locator('[data-row]', { hasText: title });
+    await row.getByRole('button', { name: `Start ${title}` }).click();
+    await row.getByRole('button', { name: /Toggle priority/ }).click();
+    // Optimistic UI shows both immediately…
+    await expect(row).toHaveAttribute('data-state', 'running');
+    await expect(row).toHaveAttribute('data-priority', 'true');
+    // …and the server ends up with both.
+    await expect
+      .poll(async () => {
+        const s = await (await page.request.get('/api/state', { headers: H })).json();
+        const l = s.loops.find((x: { title: string }) => x.title === title);
+        return `${l.state}:${l.priority}`;
+      }, { timeout: 5000 })
+      .toBe('running:true');
+    await expect(row).toHaveAttribute('data-priority', 'true');
+  });
+});
+
 const WIDTHS: { width: number; mode: string }[] = [
   { width: 180, mode: 'rail' },
   { width: 220, mode: 'rail' },

@@ -229,10 +229,6 @@ export class LoopStore {
     });
   }
 
-  private patchLocal(id: string, fn: (l: Loop) => Loop) {
-    this.set({ loops: this.state.loops.map((l) => (l.id === id ? fn(l) : l)) });
-  }
-
   private canMutate(): boolean {
     if (!this.state.online) {
       this.notify('Offline — changes are paused until you reconnect');
@@ -241,32 +237,81 @@ export class LoopStore {
     return true;
   }
 
-  /**
-   * Optimistically apply `local`, call the server, then reconcile with its response.
-   * One in-flight mutation per loop prevents duplicate submissions from double taps.
-   */
-  private async mutate(id: string, local: ((l: Loop) => Loop) | null, call: () => Promise<LoopMutationResponse>, failVerb: string) {
-    if (this.state.pending[id] || !this.canMutate()) return false;
-    const before = this.state.loops.find((l) => l.id === id);
-    this.mutationSeq++;
-    this.set({ pending: { ...this.state.pending, [id]: true } });
-    if (local && before) this.patchLocal(id, local);
-    try {
-      const r = await call();
-      if (r.loop) this.replaceLoop(r.loop);
-      this.set({ undo: r.undo });
-      return true;
-    } catch (err) {
-      if (this.handleAuthError(err)) return false;
-      if (before) this.patchLocal(id, () => before);
-      if (err instanceof ApiError && err.status === 0) this.set({ online: false });
-      this.notify(`Couldn’t ${failVerb} — ${(err as Error).message}`);
-      void this.refresh();
-      return false;
-    } finally {
+  // Per-loop mutation queues. Actions on the same loop run in order; while
+  // earlier ones are in flight, later optimistic changes are re-applied on top
+  // of each server response so the UI never flickers back.
+  private queues = new Map<string, { base: Loop | null; ops: Array<(l: Loop) => Loop>; tail: Promise<void>; count: number }>();
+  private toggling = new Set<string>();
+
+  private queueFor(id: string) {
+    let q = this.queues.get(id);
+    if (!q) {
+      q = { base: this.state.loops.find((l) => l.id === id) ?? null, ops: [], tail: Promise.resolve(), count: 0 };
+      this.queues.set(id, q);
+    }
+    return q;
+  }
+
+  private render(id: string) {
+    const q = this.queues.get(id);
+    if (!q || !q.base) return;
+    const view = q.ops.reduce((l, op) => op(l), q.base);
+    this.replaceLoop(view);
+  }
+
+  private setPending(id: string, on: boolean) {
+    if (on) this.set({ pending: { ...this.state.pending, [id]: true } });
+    else {
       const { [id]: _, ...rest } = this.state.pending;
       this.set({ pending: rest });
     }
+  }
+
+  /**
+   * Optimistically apply `local`, send `call` once earlier actions on this loop
+   * have settled, then reconcile with the server's copy.
+   */
+  private mutate(
+    id: string,
+    local: (l: Loop) => Loop,
+    call: () => Promise<LoopMutationResponse>,
+    failVerb: string,
+  ): Promise<boolean> {
+    if (!this.canMutate()) return Promise.resolve(false);
+    const q = this.queueFor(id);
+    if (!q.count) q.base = this.state.loops.find((l) => l.id === id) ?? q.base;
+    q.ops.push(local);
+    q.count++;
+    this.mutationSeq++;
+    this.setPending(id, true);
+    this.render(id);
+
+    const run = q.tail.then(async () => {
+      try {
+        const r = await call();
+        q.ops.shift();
+        if (r.loop) q.base = r.loop;
+        this.set({ undo: r.undo });
+        this.render(id);
+        return true;
+      } catch (err) {
+        q.ops.shift();
+        if (this.handleAuthError(err)) return false;
+        this.render(id);
+        if (err instanceof ApiError && err.status === 0) this.set({ online: false });
+        this.notify(`Couldn’t ${failVerb} — ${(err as Error).message}`);
+        return false;
+      } finally {
+        q.count--;
+        if (!q.count) {
+          this.queues.delete(id);
+          this.setPending(id, false);
+          if (this.state.notice) void this.refresh();
+        }
+      }
+    });
+    q.tail = run.then(() => undefined);
+    return run;
   }
 
   isPending(id: string) {
@@ -301,22 +346,21 @@ export class LoopStore {
       sessionCount: start ? 1 : 0,
       updatedAt: now,
     };
-    this.mutationSeq++;
-    this.set({ loops: [optimistic, ...this.state.loops], pending: { ...this.state.pending, [id]: true } });
-    try {
-      const r = await api<LoopMutationResponse>('/loops', { method: 'POST', body: { id, title, note: ctx, start } });
-      if (r.loop) this.replaceLoop(r.loop);
-      this.set({ undo: r.undo });
-      return id;
-    } catch (err) {
-      if (this.handleAuthError(err)) return null;
-      this.set({ loops: this.state.loops.filter((l) => l.id !== id) });
-      this.notify(`Couldn’t create loop — ${(err as Error).message}`);
-      return null;
-    } finally {
-      const { [id]: _, ...rest } = this.state.pending;
-      this.set({ pending: rest });
+    this.set({ loops: [optimistic, ...this.state.loops] });
+    const q = this.queueFor(id);
+    q.base = optimistic;
+    const ok = await this.mutate(
+      id,
+      (l) => l,
+      () => api<LoopMutationResponse>('/loops', { method: 'POST', body: { id, title, note: ctx, start } }),
+      'create loop',
+    );
+    if (!ok && !this.state.pending[id]) {
+      // Nothing reached the server: drop the optimistic row.
+      const exists = await api<StateResponse>('/state').then((s) => s.loops.some((l) => l.id === id)).catch(() => false);
+      if (!exists) this.set({ loops: this.state.loops.filter((l) => l.id !== id) });
     }
+    return ok ? id : null;
   }
 
   start(id: string) {
@@ -342,10 +386,16 @@ export class LoopStore {
     );
   }
 
-  toggle(id: string) {
+  /** Start/stop from a row or button. Repeated taps while one is in flight are ignored. */
+  async toggle(id: string) {
     const l = this.state.loops.find((x) => x.id === id);
-    if (!l || l.state === 'closed') return Promise.resolve(false);
-    return l.state === 'running' ? this.stop(id) : this.start(id);
+    if (!l || l.state === 'closed' || this.toggling.has(id)) return false;
+    this.toggling.add(id);
+    try {
+      return await (l.state === 'running' ? this.stop(id) : this.start(id));
+    } finally {
+      this.toggling.delete(id);
+    }
   }
 
   close(id: string) {

@@ -54,7 +54,7 @@ function LoopRowImpl({ loop, variant, now, pending, selected, actions }: Props) 
   const onRowClick = (e: MouseEvent) => {
     if (hasSelection() || e.defaultPrevented) return;
     if (closed) actions.inspect(id);
-    else if (!pending) actions.toggle(id);
+    else actions.toggle(id);
   };
   const stop = (fn: () => void) => (e: MouseEvent) => {
     e.stopPropagation();
@@ -97,7 +97,6 @@ function LoopRowImpl({ loop, variant, now, pending, selected, actions }: Props) 
     <ToggleButton
       loop={loop}
       size={size}
-      disabled={pending}
       onToggle={() => actions.toggle(id)}
       onReopen={() => actions.reopen(id)}
     />
