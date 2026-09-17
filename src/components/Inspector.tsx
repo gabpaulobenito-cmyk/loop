@@ -1,0 +1,320 @@
+import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { fmtAge, fmtClock, fmtDay, fmtDuration, fmtHM, fmtTimer, pad2 } from '../../shared/format';
+import { currentSessionMs, elapsedMs } from '../../shared/timer';
+import type { Loop, Session } from '../../shared/types';
+import { api } from '../lib/api';
+import { Marker } from './Marker';
+
+export type InspectorVariant = 'panel' | 'drawer' | 'sheet';
+
+export interface InspectorActions {
+  toggle: (id: string) => void;
+  reopen: (id: string) => void;
+  close: (id: string) => void;
+  priority: (id: string) => void;
+  edit: (id: string, patch: { title?: string; note?: string }) => Promise<boolean>;
+}
+
+interface Props {
+  loop: Loop | null;
+  now: number;
+  variant: InspectorVariant;
+  pending: boolean;
+  keysEnabled: boolean;
+  onDismiss?: () => void;
+  actions: InspectorActions;
+}
+
+const WEEK = 7 * 86_400_000;
+
+type SessionState = { loopId: string; sessions: Session[]; error: string | null; loading: boolean };
+
+function useSessions(loop: Loop | null) {
+  const [state, setState] = useState<SessionState | null>(null);
+  const id = loop?.id;
+  // Refetch whenever the loop's timer state changes on the server.
+  const key = loop ? `${loop.id}:${loop.updatedAt}:${loop.sessionCount}:${loop.state}` : '';
+
+  useEffect(() => {
+    if (!id) return;
+    const ctrl = new AbortController();
+    setState((s) => (s && s.loopId === id ? { ...s, loading: true } : { loopId: id, sessions: [], error: null, loading: true }));
+    const t = setTimeout(() => {
+      api<{ sessions: Session[] }>(`/loops/${id}/sessions`, { signal: ctrl.signal })
+        .then((r) => setState({ loopId: id, sessions: r.sessions, error: null, loading: false }))
+        .catch((err: Error) => {
+          if (err.name === 'AbortError') return;
+          setState((s) => ({ loopId: id, sessions: s?.loopId === id ? s.sessions : [], error: err.message, loading: false }));
+        });
+    }, 120);
+    return () => {
+      clearTimeout(t);
+      ctrl.abort();
+    };
+  }, [key, id]);
+
+  return state && state.loopId === id ? state : null;
+}
+
+export function Inspector({ loop, now, variant, pending, keysEnabled, onDismiss, actions }: Props) {
+  const rootRef = useRef<HTMLElement>(null);
+  const [editing, setEditing] = useState<'title' | 'note' | null>(null);
+  const [draft, setDraft] = useState('');
+  // Source of truth for the active edit, so blur-after-Escape cannot save.
+  const editingRef = useRef<'title' | 'note' | null>(null);
+  const sessions = useSessions(loop);
+
+  const setEdit = (field: 'title' | 'note' | null) => {
+    editingRef.current = field;
+    setEditing(field);
+  };
+
+  useEffect(() => setEdit(null), [loop?.id]);
+
+  // Move focus into modal presentations so keyboard users land in the detail.
+  useEffect(() => {
+    if (variant === 'panel') return;
+    const prev = document.activeElement as HTMLElement | null;
+    rootRef.current?.querySelector<HTMLElement>('[data-autofocus]')?.focus();
+    return () => prev?.focus?.();
+  }, [variant]);
+
+  const beginEdit = (field: 'title' | 'note') => {
+    if (!loop) return;
+    setDraft(field === 'title' ? loop.title : loop.note);
+    setEdit(field);
+  };
+
+  const commit = async () => {
+    const field = editingRef.current;
+    if (!loop || !field) return;
+    const value = draft.replace(/\s+/g, ' ').trim();
+    setEdit(null);
+    if (field === 'title' && (!value || value === loop.title)) return;
+    if (field === 'note' && value === loop.note) return;
+    await actions.edit(loop.id, { [field]: value });
+  };
+
+  // Inspector shortcuts: S start/stop, P priority, E rename, N note, ⌫ close.
+  useEffect(() => {
+    if (!keysEnabled || !loop) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.metaKey || e.ctrlKey || e.altKey || e.defaultPrevented) return;
+      const t = e.target as HTMLElement;
+      if (t.closest('input, textarea, [contenteditable="true"]')) return;
+      const within = variant !== 'panel' || !!rootRef.current?.contains(document.activeElement);
+      const k = e.key.toLowerCase();
+      if (k === 's' && within) {
+        e.preventDefault();
+        if (loop.state === 'closed') actions.reopen(loop.id);
+        else actions.toggle(loop.id);
+      } else if (k === 'p' && within && loop.state !== 'closed') {
+        e.preventDefault();
+        actions.priority(loop.id);
+      } else if (k === 'e' && within) {
+        e.preventDefault();
+        beginEdit('title');
+      } else if ((e.key === 'Backspace' || e.key === 'Delete') && within && loop.state !== 'closed') {
+        e.preventDefault();
+        actions.close(loop.id);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  });
+
+  const dismiss =
+    onDismiss && (
+      <button type="button" className="insp-btn insp-btn--ghost" aria-label="Close session detail" title="ESC" onClick={onDismiss} data-autofocus={loop ? undefined : true}>
+        ✕
+      </button>
+    );
+
+  if (!loop) {
+    return (
+      <section ref={rootRef} className="inspector" aria-label="Session detail">
+        {onDismiss && <div className="insp-head" style={{ justifyContent: 'flex-end' }}>{dismiss}</div>}
+        <div className="insp-empty">
+          NO LOOP SELECTED
+          <br />
+          CLICK A TIMER OR AGE TO INSPECT ITS SESSIONS
+        </div>
+      </section>
+    );
+  }
+
+  const running = loop.state === 'running';
+  const closed = loop.state === 'closed';
+  const total = elapsedMs(loop, now);
+
+  const list = (sessions?.sessions ?? []).map((s) => {
+    const live = s.endedAt == null;
+    const end = live ? now : s.endedAt!;
+    return { ...s, live, dur: Math.max(0, end - s.startedAt), end };
+  });
+  const maxDur = Math.max(1, ...list.map((s) => s.dur));
+  const thisWeek = list.filter((s) => s.startedAt > now - WEEK).length;
+  const count = sessions ? list.length : loop.sessionCount;
+
+  const stats = [
+    { label: 'ACTIVE TIME', value: fmtHM(total), cls: '' },
+    closed
+      ? { label: 'CLOSED', value: `${fmtAge(now - (loop.closedAt ?? now))} ago`, cls: '' }
+      : { label: 'OPEN FOR', value: fmtAge(now - loop.createdAt), cls: '' },
+    { label: 'CURRENT SESSION', value: running ? fmtTimer(currentSessionMs(loop, now)) : '—', cls: running ? 'is-live' : 'is-dim' },
+    { label: 'SESSIONS', value: pad2(count), cls: '' },
+  ];
+
+  const editKeys = (e: ReactKeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
+      e.preventDefault();
+      void commit();
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      e.stopPropagation();
+      setEdit(null);
+    }
+  };
+
+  return (
+    <section ref={rootRef} className="inspector" aria-label={`Session detail: ${loop.title}`} data-inspector={loop.id}>
+      <div className="insp-head">
+        <Marker loop={loop} />
+        <div className="insp-head__text">
+          {editing === 'title' ? (
+            <input
+              className="insp-edit"
+              aria-label="Loop title"
+              autoFocus
+              maxLength={140}
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={editKeys}
+              onBlur={() => void commit()}
+            />
+          ) : (
+            <span className="insp-head__title" title={loop.title}>
+              {loop.title}
+            </span>
+          )}
+          {editing === 'note' ? (
+            <input
+              className="insp-edit insp-edit--note"
+              aria-label="Context note"
+              autoFocus
+              maxLength={280}
+              placeholder="Short context note"
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={editKeys}
+              onBlur={() => void commit()}
+            />
+          ) : (
+            <span className={`insp-head__note${loop.note ? '' : ' is-empty'}`} title={loop.note}>
+              {loop.note || 'No context note'}
+            </span>
+          )}
+        </div>
+        <span className={`insp-head__timer${running ? ' is-running' : ''}`} aria-label={`Active time ${fmtHM(total)}`}>
+          {fmtTimer(total)}
+        </span>
+        {closed ? (
+          <button type="button" className="insp-btn" disabled={pending} onClick={() => actions.reopen(loop.id)} data-autofocus>
+            ↺ REOPEN
+          </button>
+        ) : (
+          <button
+            type="button"
+            className="insp-btn"
+            disabled={pending}
+            onClick={() => actions.toggle(loop.id)}
+            aria-label={running ? `Stop ${loop.title}` : `Start ${loop.title}`}
+            data-autofocus
+          >
+            {running ? '■ STOP' : '▶ START'}
+          </button>
+        )}
+        {dismiss}
+      </div>
+
+      <div className="insp-stats">
+        {stats.map((s) => (
+          <div key={s.label} className="insp-stat">
+            <div className="insp-stat__label">{s.label}</div>
+            <div className={`insp-stat__value ${s.cls}`}>{s.value}</div>
+          </div>
+        ))}
+      </div>
+
+      <div className="insp-sect">
+        <span className="insp-sect__label">SESSIONS</span>
+        <span className="insp-sect__count">{pad2(count)}</span>
+        <span className="sect__rule" />
+        <span className="insp-sect__meta">
+          CREATED {fmtDay(loop.createdAt, now)} {fmtClock(loop.createdAt)}
+          {thisWeek > 0 ? ` · ${thisWeek}× THIS WEEK` : ''}
+        </span>
+      </div>
+
+      <div className="inspector__scroll">
+        {sessions?.error && !list.length ? (
+          <div className="empty">COULDN’T LOAD SESSIONS — {sessions.error}</div>
+        ) : !sessions && loop.sessionCount > 0 ? (
+          <div className="empty">LOADING SESSIONS…</div>
+        ) : list.length === 0 ? (
+          <div className="empty">NO SESSIONS YET — START THIS LOOP TO TRACK TIME</div>
+        ) : (
+          <ul aria-label="Session history">
+            {list.map((s) => (
+              <li key={s.id} className="sess">
+                <span className="sess__day">{fmtDay(s.startedAt, now)}</span>
+                <span className="sess__range">
+                  {fmtClock(s.startedAt)} → {s.live ? 'NOW' : fmtClock(s.end)}
+                </span>
+                <span className="sess__bar" aria-hidden="true">
+                  <span className={`sess__fill${s.live ? ' is-live' : ''}`} style={{ width: `${Math.max(2, (s.dur / maxDur) * 100)}%` }} />
+                </span>
+                <span className={`sess__dur${s.live ? ' is-live' : ''}`}>{s.live ? fmtTimer(s.dur) : fmtDuration(s.dur)}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
+      <div className="insp-foot">
+        {closed ? (
+          <button type="button" className="insp-foot__btn insp-foot__btn--main" disabled={pending} onClick={() => actions.reopen(loop.id)}>
+            REOPEN LOOP ↺
+          </button>
+        ) : (
+          <button
+            type="button"
+            className="insp-foot__btn insp-foot__btn--main"
+            disabled={pending}
+            onClick={() => actions.close(loop.id)}
+            title={running ? 'Stops the running session, then closes' : 'Close this loop'}
+          >
+            CLOSE LOOP ⌫
+          </button>
+        )}
+        {!closed && (
+          <button
+            type="button"
+            className="insp-foot__btn"
+            aria-pressed={loop.priority}
+            disabled={pending}
+            onClick={() => actions.priority(loop.id)}
+          >
+            PRIORITY
+          </button>
+        )}
+        <button type="button" className="insp-foot__btn" onClick={() => beginEdit('title')}>
+          RENAME
+        </button>
+        <button type="button" className="insp-foot__btn" onClick={() => beginEdit('note')}>
+          NOTE
+        </button>
+      </div>
+    </section>
+  );
+}
