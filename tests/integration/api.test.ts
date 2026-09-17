@@ -7,7 +7,6 @@ import { createPool } from '../../server/db';
 import { TEST_DATABASE_URL, fakeClock, freshDatabase } from '../helpers/db';
 import type { Loop, Session } from '../../shared/types';
 
-const KEY = 'integration-test-access-key';
 const M = 60_000;
 const H = 60 * M;
 
@@ -16,11 +15,7 @@ const clock = fakeClock();
 let agent: ReturnType<typeof request.agent>;
 
 function makeAgent(p: Pool) {
-  return request.agent(createApp({ pool: p, accessKey: KEY, clock: clock.now }));
-}
-
-async function login(a: ReturnType<typeof request.agent>) {
-  await a.post('/api/auth/login').set('x-loop-client', '1').send({ key: KEY }).expect(200);
+  return request.agent(createApp({ pool: p, clock: clock.now }));
 }
 
 const post = (path: string, body?: object) => agent.post(path).set('x-loop-client', '1').send(body ?? {});
@@ -44,41 +39,27 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
-  await pool.query('TRUNCATE loops, loop_sessions, action_history, settings, auth_sessions CASCADE');
+  await pool.query('TRUNCATE loops, loop_sessions, action_history, settings CASCADE');
   agent = makeAgent(pool);
-  await login(agent);
 });
 
-describe('access control', () => {
-  it('rejects private endpoints without a session', async () => {
-    const anon = makeAgent(pool);
-    await anon.get('/api/state').expect(401);
-    await anon.post('/api/loops').set('x-loop-client', '1').send({ id: randomUUID(), title: 'x' }).expect(401);
-    await anon.get(`/api/loops/${randomUUID()}/sessions`).expect(401);
-  });
-
-  it('keeps the health check public and data-free', async () => {
+describe('request protection', () => {
+  it('keeps the health check data-free', async () => {
     const res = await makeAgent(pool).get('/api/health').expect(200);
     expect(res.body).toEqual({ ok: true });
-  });
-
-  it('rejects a wrong access key', async () => {
-    const anon = makeAgent(pool);
-    await anon.post('/api/auth/login').set('x-loop-client', '1').send({ key: 'nope' }).expect(401);
-    await anon.get('/api/state').expect(401);
   });
 
   it('requires the client header on state-changing requests', async () => {
     await agent.post('/api/loops').send({ id: randomUUID(), title: 'x' }).expect(403);
   });
 
-  it('sets an HttpOnly session cookie and logs out', async () => {
-    const anon = makeAgent(pool);
-    const res = await anon.post('/api/auth/login').set('x-loop-client', '1').send({ key: KEY }).expect(200);
-    expect(String(res.headers['set-cookie'])).toMatch(/HttpOnly/i);
-    await anon.get('/api/state').expect(200);
-    await anon.post('/api/auth/logout').set('x-loop-client', '1').expect(200);
-    await anon.get('/api/state').expect(401);
+  it('marks responses noindex', async () => {
+    const res = await agent.get('/api/state').expect(200);
+    expect(res.headers['x-robots-tag']).toMatch(/noindex/);
+  });
+
+  it('has no auth endpoints', async () => {
+    await agent.post('/api/auth/login').set('x-loop-client', '1').send({ key: 'x' }).expect(404);
   });
 });
 
@@ -301,7 +282,6 @@ describe('state, settings and persistence', () => {
     const pool2 = createPool(TEST_DATABASE_URL);
     try {
       const agent2 = makeAgent(pool2);
-      await login(agent2);
       clock.advance(3 * M);
       const res = await agent2.get('/api/state').expect(200);
       const found = res.body.loops.find((x: Loop) => x.id === l.id) as Loop;

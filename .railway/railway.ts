@@ -1,10 +1,8 @@
-import { defineRailway, github, postgres, preserve, project, service, volume } from "railway/iac";
+import { defineRailway, github, postgres, project, service, volume } from "railway/iac";
 
 /**
  * LOOP infrastructure on Railway (project "Loop", environment "production").
  * Preview with `railway config plan`, apply with `railway config apply`.
- * Secrets are never written here: LOOP_ACCESS_KEY uses preserve() so the value
- * set in the Railway dashboard is kept.
  */
 export default defineRailway(() => {
   const Postgres = postgres("Postgres", { region: "sfo" });
@@ -32,7 +30,6 @@ export default defineRailway(() => {
     replicas: { sfo: 1 },
     env: {
       DATABASE_URL: Postgres.env.DATABASE_URL,
-      LOOP_ACCESS_KEY: preserve(),
       NODE_ENV: "production",
     },
   });

@@ -1218,57 +1218,6 @@ ul {
   .insp-foot__btn { font-size: 9px; letter-spacing: 0.06em; }
 }
 
-/* ── Login ──────────────────────────────────────────────────────────────── */
-
-.gate {
-  height: 100%;
-  height: 100dvh;
-  display: grid;
-  place-items: center;
-  padding: 16px 8px;
-  background: var(--bg);
-}
-.gate__panel {
-  width: min(340px, 100%);
-  background: var(--section);
-  border: 1px solid var(--line-ctl);
-  border-radius: 6px;
-  overflow: hidden;
-}
-.gate__head { display: flex; align-items: center; gap: 7px; height: 36px; padding: 0 12px; background: var(--bar); border-bottom: 1px solid var(--line); }
-.gate__body { padding: 14px 12px 12px; display: flex; flex-direction: column; gap: 8px; }
-.gate__label { font: 600 10.5px/1 var(--f-cond); letter-spacing: 0.2em; color: var(--muted); }
-.gate__field {
-  height: 34px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 0 10px;
-  background: var(--bg);
-  border: 1px solid var(--line-ctl);
-  border-radius: 3px;
-}
-.gate__field:focus-within { border-color: var(--lime-ink); }
-.gate__field input { flex: 1; min-width: 0; background: transparent; border: 0; outline: none; font: 400 13px/1 var(--f-mono); color: var(--text-hi); }
-.gate__submit {
-  height: 32px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0 10px;
-  background: var(--btn-new-bg);
-  border: 1px solid var(--lime-border);
-  border-radius: 3px;
-  font: 600 11px/1 var(--f-cond);
-  letter-spacing: 0.16em;
-  color: var(--btn-new-ink);
-}
-.gate__submit:hover:not(:disabled) { background: var(--lime-bg-strong); border-color: var(--lime-ink); }
-.gate__submit:disabled { opacity: 0.55; }
-.gate__submit kbd { font: 500 9.5px/1 var(--f-mono); color: var(--btn-new-hint); }
-.gate__error { font: 500 10px/1.4 var(--f-mono); letter-spacing: 0.04em; color: var(--text-hi); min-height: 14px; }
-.gate__foot { font: 500 9px/1.5 var(--f-mono); letter-spacing: 0.06em; color: var(--muted-3); }
-
 .boot { height: 100%; display: grid; place-items: center; font: 500 10px/1 var(--f-mono); letter-spacing: 0.12em; color: var(--muted-3); }
 
 /* ── Motion preferences ─────────────────────────────────────────────────── */

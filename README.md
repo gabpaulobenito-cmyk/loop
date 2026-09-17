@@ -103,7 +103,7 @@ npm run migrate:dev           # apply migrations to DATABASE_URL
 npm run dev                   # API on :3000, Vite on :5173 (proxied /api)
 ```
 
-Open http://localhost:5173 and unlock with your `LOOP_ACCESS_KEY`.
+Open http://localhost:5173.
 
 To run the production build locally:
 
@@ -119,11 +119,9 @@ node --env-file=.env dist/server/index.js    # http://localhost:3000
 | Variable | Required | Description |
 | -------- | -------- | ----------- |
 | `DATABASE_URL` | yes | PostgreSQL connection string. On Railway: `${{Postgres.DATABASE_URL}}`. |
-| `LOOP_ACCESS_KEY` | yes | Secret used to unlock the app. Minimum 16 characters in production. Generate one with `openssl rand -base64 32`. |
 | `PORT` | no | HTTP port (Railway injects this). Default `3000`. |
-| `NODE_ENV` | no | Set to `production` in production: enables `Secure` cookies and the key-length check. |
+| `NODE_ENV` | no | Set to `production` in production. |
 | `DATABASE_SSL` | no | `true` to connect with TLS (needed for public Postgres proxies, not Railway's private network). |
-| `SESSION_TTL_DAYS` | no | Sign-in session lifetime. Default `90`. |
 | `TEST_DATABASE_URL` | tests | Database the integration and e2e suites **drop and recreate**. Never point it at real data. |
 
 ## Database migrations
@@ -147,18 +145,16 @@ npm run test:e2e       # builds, starts the prod server on :3210, runs Playwrigh
 
 First-time Playwright setup: `npx playwright install chromium`.
 
-Coverage includes timer accumulation across start → stop → resume, idempotent and concurrent start/stop, closing a running loop, reopen, priority, sorting, validation, auth and CSRF protection, undo (including session restoration and expiry), persistence across a simulated server restart, and responsive smoke tests at 180, 220, 260, 375, 393, 450, 720, 1024 and 1440 px (no horizontal overflow, 6×6 circular markers, working controls).
+Coverage includes timer accumulation across start → stop → resume, idempotent and concurrent start/stop, closing a running loop, reopen, priority, sorting, validation, CSRF protection, undo (including session restoration and expiry), persistence across a simulated server restart, and responsive smoke tests at 180, 220, 260, 375, 393, 450, 720, 1024 and 1440 px (no horizontal overflow, 6×6 circular markers, working controls).
 
-## Security
+## Access
 
-- All loop data sits behind `LOOP_ACCESS_KEY`. Signing in issues a random 256-bit session token in an `HttpOnly`, `SameSite=Lax` cookie (`Secure` in production). Only a SHA-256 hash of the token is stored (`auth_sessions`).
-- The key is compared in constant time. Failed attempts are rate limited per IP (8 per 15 minutes).
+There is no sign-in: anyone who has the URL can open the workspace and change loops. Pages and API responses send `noindex` so the site stays out of search engines, but the URL itself is the only thing keeping it private. Don't share it.
+
+Other protections:
+
 - State-changing requests require an `x-loop-client` header, which a cross-site form can't send.
-- `/api/health` is the only unauthenticated data endpoint and returns only `{ ok: true }`.
 - Helmet sets a strict Content-Security-Policy. All scripts, styles and fonts are self-hosted.
-- Signing out deletes the server-side session.
-
-To rotate the access key, change `LOOP_ACCESS_KEY` and redeploy. To sign out every device, also run `DELETE FROM auth_sessions;`.
 
 ## Railway deployment
 
@@ -171,7 +167,7 @@ Infrastructure is defined in code in **`.railway/railway.ts`** (Railway's config
   - Start: `npm start`
   - Health check: `GET /api/health` (checks the database connection)
   - Restart policy: on failure, up to 10 retries
-  - Variables: `DATABASE_URL` references `Postgres.DATABASE_URL`, `NODE_ENV=production`, and `LOOP_ACCESS_KEY` is `preserve()`d so the secret stays in Railway, never in git
+  - Variables: `DATABASE_URL` references `Postgres.DATABASE_URL`, and `NODE_ENV=production`
 
 ```bash
 railway link --project <project-id> --environment production
@@ -182,16 +178,15 @@ railway config apply     # apply infrastructure changes
 Setting up a new environment:
 
 1. `railway config apply` creates Postgres and the service.
-2. Set the secret: `railway variables --service loop --set LOOP_ACCESS_KEY=<long random secret>`.
-3. Give the Railway GitHub App access to this repository (GitHub → Settings → Applications → Railway → *Repository access*). Pushes to `main` then deploy automatically. Until then, `railway up --service loop` deploys the local checkout.
-4. Generate a domain: `railway domain --service loop`. HTTPS is automatic.
+2. Give the Railway GitHub App access to this repository (GitHub → Settings → Applications → Railway → *Repository access*). Pushes to `main` then deploy automatically. Until then, `railway up --service loop` deploys the local checkout.
+3. Generate a domain: `railway domain --service loop`. HTTPS is automatic.
 
 Data lives in the Railway PostgreSQL volume and survives deploys and restarts. The app service itself is stateless.
 
 ### Post-deploy smoke test
 
-`tests/smoke` runs the full lifecycle against a live deployment: create + start, refresh with a timer check against server timestamps, stop, resume, priority, inspector, close, reopen, persistence, and layouts at 180 / 220 / 260 / 375 / 393 / 720 / 1440 px. It fails on any browser console error, then undoes its own tagged actions and signs out.
+`tests/smoke` runs the full lifecycle against a live deployment: create + start, refresh with a timer check against server timestamps, stop, resume, priority, inspector, close, reopen, persistence, and layouts at 180 / 220 / 260 / 375 / 393 / 720 / 1440 px. It fails on any browser console error, then undoes its own tagged actions.
 
 ```bash
-SMOKE_URL=https://<your-domain> SMOKE_ACCESS_KEY=<key> npm run test:smoke
+SMOKE_URL=https://<your-domain> npm run test:smoke
 ```

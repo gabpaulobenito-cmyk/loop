@@ -1,12 +1,9 @@
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
-import { E2E_KEY } from '../../playwright.config';
 
 const H = { 'x-loop-client': '1' };
 
 async function login(page: Page) {
   await page.goto('/');
-  await page.getByLabel('ACCESS KEY').fill(E2E_KEY);
-  await page.getByRole('button', { name: /UNLOCK/ }).click();
   await expect(page.getByRole('main', { name: 'Loops' })).toBeVisible();
 }
 
@@ -24,15 +21,11 @@ function secs(text: string) {
   return parts.reduce((a, n) => a * 60 + n, 0);
 }
 
-test.describe('access control', () => {
-  test('private data requires the access key', async ({ page, request }) => {
-    expect((await request.get('/api/state')).status()).toBe(401);
-    await page.goto('/');
-    await page.getByLabel('ACCESS KEY').fill('wrong-key');
-    await page.getByRole('button', { name: /UNLOCK/ }).click();
-    await expect(page.getByRole('alert')).toContainText(/not valid/i);
-    await expect(page.getByRole('main', { name: 'Loops' })).toHaveCount(0);
-  });
+test('opens straight into the workspace with no sign-in', async ({ page, request }) => {
+  expect((await request.get('/api/state')).status()).toBe(200);
+  await page.goto('/');
+  await expect(page.getByRole('main', { name: 'Loops' })).toBeVisible();
+  await expect(page.getByLabel('ACCESS KEY')).toHaveCount(0);
 });
 
 test.describe('core loop lifecycle (desktop)', () => {

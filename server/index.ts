@@ -15,18 +15,11 @@ function required(name: string): string {
 }
 
 const databaseUrl = required('DATABASE_URL');
-const accessKey = required('LOOP_ACCESS_KEY');
-if (isProd && accessKey.length < 16) {
-  console.error('[loop] LOOP_ACCESS_KEY must be at least 16 characters in production');
-  process.exit(1);
-}
 
 const pool = createPool(databaseUrl);
 const app = createApp({
   pool,
-  accessKey,
-  secureCookies: isProd,
-  sessionTtlDays: Number(env.SESSION_TTL_DAYS) || 90,
+  production: isProd,
   staticDir: path.resolve(process.cwd(), 'dist/client'),
 });
 

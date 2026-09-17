@@ -1,18 +1,15 @@
 import { expect, test, type Page } from '@playwright/test';
 
-const KEY = process.env.SMOKE_ACCESS_KEY ?? '';
 const TAG = `SMOKE-${Date.now().toString(36).toUpperCase()}`;
 const H = { 'x-loop-client': '1' };
 const WIDTHS = [180, 220, 260, 375, 393, 720, 1440];
 
 const secs = (t: string) => t.trim().split(':').map(Number).reduce((a, n) => a * 60 + n, 0);
 
-test.skip(!process.env.SMOKE_URL || !KEY, 'SMOKE_URL and SMOKE_ACCESS_KEY are required');
+test.skip(!process.env.SMOKE_URL, 'SMOKE_URL is required');
 
 async function login(page: Page) {
   await page.goto('/');
-  await page.getByLabel('ACCESS KEY').fill(KEY);
-  await page.getByRole('button', { name: /UNLOCK/ }).click();
   await expect(page.getByRole('main', { name: 'Loops' })).toBeVisible();
 }
 
@@ -120,6 +117,5 @@ test('production lifecycle, persistence, timers and layouts', async ({ page }) =
     }
     const s = await (await page.request.get('/api/state', { headers: H })).json();
     console.log(`leftover smoke loops: ${s.loops.filter((l: { title: string }) => l.title.includes(TAG)).length}`);
-    await page.request.post('/api/auth/logout', { headers: H });
   }
 });

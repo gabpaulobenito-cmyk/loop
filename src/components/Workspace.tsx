@@ -218,7 +218,7 @@ export function Workspace() {
   const setTheme = (v: ThemePref) => void store.updateSettings({ theme: v });
 
   const railOrDesk = mode === 'rail' ? 'sect--rail' : '';
-  const loading = s.load === 'loading' && s.loops.length === 0;
+  const loading = (s.load === 'loading' || s.load === 'idle') && s.loops.length === 0;
 
   const runningSection = (
     <section aria-label="Running loops">
@@ -507,18 +507,6 @@ export function Workspace() {
         }}
       >
         <span>SYNC NOW</span>
-        <span />
-      </button>
-      <button
-        type="button"
-        role="menuitem"
-        className="menu__item"
-        onClick={() => {
-          setMenuOpen(false);
-          void store.logout();
-        }}
-      >
-        <span>SIGN OUT</span>
         <span />
       </button>
     </MenuPopover>

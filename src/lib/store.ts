@@ -12,7 +12,6 @@ import {
   type UndoTop,
 } from '../../shared/types';
 
-export type AuthStatus = 'checking' | 'signed-out' | 'signed-in';
 export type LoadStatus = 'idle' | 'loading' | 'ready' | 'error';
 
 export interface Notice {
@@ -21,7 +20,6 @@ export interface Notice {
 }
 
 export interface StoreState {
-  auth: AuthStatus;
   load: LoadStatus;
   loadError: string | null;
   loops: Loop[];
@@ -50,7 +48,6 @@ const DOUBLE_TAP_MS = 350;
 
 export class LoopStore {
   private state: StoreState = {
-    auth: 'checking',
     load: 'idle',
     loadError: null,
     loops: [],
@@ -86,7 +83,7 @@ export class LoopStore {
     window.addEventListener('online', this.onOnline);
     window.addEventListener('offline', this.onOffline);
     document.addEventListener('visibilitychange', this.onVisibility);
-    void this.checkAuth();
+    void this.load();
     return () => {
       window.removeEventListener('online', this.onOnline);
       window.removeEventListener('offline', this.onOffline);
@@ -118,51 +115,6 @@ export class LoopStore {
     this.pollTimer = null;
   }
 
-  async checkAuth() {
-    try {
-      const { authenticated } = await api<{ authenticated: boolean }>('/auth/session');
-      if (authenticated) {
-        this.set({ auth: 'signed-in' });
-        await this.load();
-      } else {
-        this.set({ auth: 'signed-out' });
-      }
-    } catch (err) {
-      // Cannot reach the server: keep the gate closed but show why.
-      this.set({ auth: 'signed-out', loadError: (err as Error).message });
-    }
-  }
-
-  async login(key: string): Promise<string | null> {
-    try {
-      await api('/auth/login', { method: 'POST', body: { key } });
-      this.set({ auth: 'signed-in', loadError: null });
-      await this.load();
-      return null;
-    } catch (err) {
-      return (err as Error).message;
-    }
-  }
-
-  async logout() {
-    try {
-      await api('/auth/logout', { method: 'POST' });
-    } catch {
-      // cookie is cleared server-side when reachable; always reset locally
-    }
-    this.stopPolling();
-    this.set({ auth: 'signed-out', load: 'idle', loops: [], undo: null, notice: null });
-  }
-
-  private handleAuthError(err: unknown) {
-    if (err instanceof ApiError && err.status === 401) {
-      this.stopPolling();
-      this.set({ auth: 'signed-out', load: 'idle', loops: [] });
-      return true;
-    }
-    return false;
-  }
-
   async load() {
     this.set({ load: 'loading', loadError: null });
     try {
@@ -171,13 +123,12 @@ export class LoopStore {
       this.set({ load: 'ready', online: true });
       this.startPolling();
     } catch (err) {
-      if (this.handleAuthError(err)) return;
       this.set({ load: 'error', loadError: (err as Error).message });
     }
   }
 
   async refresh() {
-    if (this.state.auth !== 'signed-in' || this.refreshing) return;
+    if (this.state.load === 'idle' || this.state.load === 'loading' || this.refreshing) return;
     if (this.state.load === 'error') return this.load();
     this.refreshing = true;
     const seq = this.mutationSeq;
@@ -188,7 +139,6 @@ export class LoopStore {
       this.applyState(s);
       if (!this.state.online) this.set({ online: true });
     } catch (err) {
-      if (this.handleAuthError(err)) return;
       if (err instanceof ApiError && err.status === 0) this.set({ online: false });
     } finally {
       this.refreshing = false;
@@ -297,7 +247,6 @@ export class LoopStore {
         return true;
       } catch (err) {
         q.ops.shift();
-        if (this.handleAuthError(err)) return false;
         this.render(id);
         if (err instanceof ApiError && err.status === 0) this.set({ online: false });
         this.notify(`Couldn’t ${failVerb} — ${(err as Error).message}`);
@@ -469,7 +418,6 @@ export class LoopStore {
       if (r.loop) this.replaceLoop(r.loop);
       this.set({ undo: r.undo });
     } catch (err) {
-      if (this.handleAuthError(err)) return;
       this.notify((err as Error).message);
       void this.refresh();
     } finally {
@@ -485,7 +433,6 @@ export class LoopStore {
       const r = await api<{ settings: Settings }>('/settings', { method: 'PUT', body: patch });
       this.set({ settings: r.settings });
     } catch (err) {
-      if (this.handleAuthError(err)) return;
       // Keep the local choice for this session; it simply won't sync.
       if (err instanceof ApiError && err.status !== 0) {
         this.set({ settings: prev });

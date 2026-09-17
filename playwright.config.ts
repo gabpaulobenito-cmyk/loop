@@ -1,7 +1,6 @@
 import { defineConfig, devices } from '@playwright/test';
 
 const PORT = Number(process.env.E2E_PORT ?? 3210);
-export const E2E_KEY = 'e2e-access-key-0123456789';
 const DB = process.env.TEST_DATABASE_URL ?? 'postgres://localhost:5432/loop_test';
 
 export default defineConfig({
@@ -26,7 +25,6 @@ export default defineConfig({
     env: {
       PORT: String(PORT),
       DATABASE_URL: DB,
-      LOOP_ACCESS_KEY: E2E_KEY,
     },
   },
 });
