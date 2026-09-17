@@ -52,7 +52,8 @@ test('production lifecycle, persistence, timers and layouts', async ({ page }) =
     const openRow = page.getByRole('list', { name: 'Open loops' }).locator('[data-row]', { hasText: title });
     await expect(openRow).toBeVisible();
 
-    // Resume keeps accumulated time
+    // Resume keeps accumulated time (pause past the double-tap guard)
+    await page.waitForTimeout(400);
     await openRow.getByRole('button', { name: `Resume ${title}` }).click();
     await expect(row).toBeVisible();
     expect(secs(await timer.innerText())).toBeGreaterThanOrEqual(before);

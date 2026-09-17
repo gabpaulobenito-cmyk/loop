@@ -71,7 +71,8 @@ test.describe('core loop lifecycle (desktop)', () => {
     await expect(openRow).toBeVisible();
     await expect(openRow.locator('[data-marker="open"]')).toBeVisible();
 
-    // Resume via row click (V2: ROW ⇄ START/STOP).
+    // Resume via row click (V2: ROW ⇄ START/STOP). Pause past the double-tap guard.
+    await page.waitForTimeout(400);
     await openRow.locator('.row__note').click();
     await expect(row).toBeVisible();
     // Accumulated time carries over into the resumed session.
@@ -163,6 +164,44 @@ test.describe('slow network', () => {
       }, { timeout: 5000 })
       .toBe('running:true');
     await expect(row).toHaveAttribute('data-priority', 'true');
+
+    // Stop, then resume while the stop request is still in flight.
+    await page.unroute('**/api/loops/**');
+    await page.route('**/api/loops/**', async (route) => {
+      await new Promise((r) => setTimeout(r, 1200));
+      await route.continue();
+    });
+    await row.getByRole('button', { name: `Stop ${title}` }).click();
+    await expect(row).toHaveAttribute('data-state', 'open');
+    await page.waitForTimeout(500);
+    await row.getByRole('button', { name: `Resume ${title}` }).click();
+    await expect(row).toHaveAttribute('data-state', 'running');
+    await expect
+      .poll(async () => {
+        const s = await (await page.request.get('/api/state', { headers: H })).json();
+        const l = s.loops.find((x: { title: string }) => x.title === title);
+        return `${l.state}:${l.sessionCount}`;
+      }, { timeout: 8000 })
+      .toBe('running:2');
+  });
+
+  test('a double tap on start/stop only toggles once', async ({ page }) => {
+    await login(page);
+    await resetData(page.request);
+    const title = `DoubleTap ${Date.now()}`;
+    await page.request.post('/api/loops', { headers: H, data: { id: crypto.randomUUID(), title } });
+    await page.reload();
+    const row = page.locator('[data-row]', { hasText: title });
+    await row.getByRole('button', { name: `Start ${title}` }).dblclick();
+    await expect
+      .poll(async () => {
+        const s = await (await page.request.get('/api/state', { headers: H })).json();
+        const l = s.loops.find((x: { title: string }) => x.title === title);
+        return `${l.state}:${l.sessionCount}`;
+      })
+      .toBe('running:1');
+    await page.waitForTimeout(500);
+    await expect(row).toHaveAttribute('data-state', 'running');
   });
 });
 
@@ -236,6 +275,7 @@ test.describe('responsive smoke', () => {
       // Stop / start through the dedicated control works at every width.
       await page.getByRole('button', { name: 'Stop Yuna Research' }).click();
       await expect(page.getByRole('button', { name: 'Resume Yuna Research' })).toBeVisible();
+      await page.waitForTimeout(400); // past the double-tap guard
       await page.getByRole('button', { name: 'Resume Yuna Research' }).click();
       await expect(page.getByRole('button', { name: 'Stop Yuna Research' })).toBeVisible();
 

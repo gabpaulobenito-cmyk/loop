@@ -46,6 +46,7 @@ function cachedTheme(): Settings['theme'] {
 }
 
 const POLL_MS = 20_000;
+const DOUBLE_TAP_MS = 350;
 
 export class LoopStore {
   private state: StoreState = {
@@ -241,7 +242,7 @@ export class LoopStore {
   // earlier ones are in flight, later optimistic changes are re-applied on top
   // of each server response so the UI never flickers back.
   private queues = new Map<string, { base: Loop | null; ops: Array<(l: Loop) => Loop>; tail: Promise<void>; count: number }>();
-  private toggling = new Set<string>();
+  private lastToggleAt = Number.NEGATIVE_INFINITY;
 
   private queueFor(id: string) {
     let q = this.queues.get(id);
@@ -386,16 +387,17 @@ export class LoopStore {
     );
   }
 
-  /** Start/stop from a row or button. Repeated taps while one is in flight are ignored. */
-  async toggle(id: string) {
+  /**
+   * Start/stop from a row or button. A second toggle within the double-tap window is
+   * ignored: rows move between RUNNING and OPEN, so a stray second tap could otherwise
+   * undo the first or hit a different loop. Deliberate follow-ups are queued.
+   */
+  toggle(id: string) {
     const l = this.state.loops.find((x) => x.id === id);
-    if (!l || l.state === 'closed' || this.toggling.has(id)) return false;
-    this.toggling.add(id);
-    try {
-      return await (l.state === 'running' ? this.stop(id) : this.start(id));
-    } finally {
-      this.toggling.delete(id);
-    }
+    const t = performance.now();
+    if (!l || l.state === 'closed' || t - this.lastToggleAt < DOUBLE_TAP_MS) return Promise.resolve(false);
+    this.lastToggleAt = t;
+    return l.state === 'running' ? this.stop(id) : this.start(id);
   }
 
   close(id: string) {
