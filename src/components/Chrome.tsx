@@ -267,35 +267,39 @@ export function CaptureDialog({ onClose, onCreate }: CaptureDialogProps) {
           </button>
         </div>
 
-        <label className="capture__label" htmlFor="capture-title">WHAT ARE YOU STARTING?</label>
-        <textarea
-          id="capture-title"
-          ref={titleRef}
-          className="capture__title"
-          rows={1}
-          maxLength={140}
-          placeholder="Title"
-          autoComplete="off"
-          enterKeyHint="go"
-          value={title}
-          onChange={(e) => setTitle(e.target.value.replace(/\n/g, ' '))}
-          onKeyDown={onKey}
-        />
+        <div className="capture__field capture__field--title">
+          <label className="capture__label" htmlFor="capture-title">WHAT ARE YOU STARTING?</label>
+          <textarea
+            id="capture-title"
+            ref={titleRef}
+            className="capture__title"
+            rows={1}
+            maxLength={140}
+            placeholder="Title"
+            autoComplete="off"
+            enterKeyHint="go"
+            value={title}
+            onChange={(e) => setTitle(e.target.value.replace(/\n/g, ' '))}
+            onKeyDown={onKey}
+          />
+        </div>
 
-        <label className="capture__label" htmlFor="capture-note">NOTE</label>
-        <textarea
-          id="capture-note"
-          ref={noteRef}
-          className="capture__note"
-          rows={2}
-          maxLength={280}
-          placeholder="Context — where you left off, what’s next (optional)"
-          autoComplete="off"
-          enterKeyHint="go"
-          value={note}
-          onChange={(e) => setNote(e.target.value.replace(/\n/g, ' '))}
-          onKeyDown={onKey}
-        />
+        <div className="capture__field capture__field--note">
+          <label className="capture__label" htmlFor="capture-note">NOTE</label>
+          <textarea
+            id="capture-note"
+            ref={noteRef}
+            className="capture__note"
+            rows={2}
+            maxLength={280}
+            placeholder="Where you left off, what’s next (optional)"
+            autoComplete="off"
+            enterKeyHint="go"
+            value={note}
+            onChange={(e) => setNote(e.target.value.replace(/\n/g, ' '))}
+            onKeyDown={onKey}
+          />
+        </div>
 
         <div className="capture__foot">
           <button type="button" className="capture__secondary" disabled={!has} onClick={() => submit(false)}>
