@@ -80,17 +80,24 @@ export class LoopStore {
   // ── Lifecycle ─────────────────────────────────────────────────────────────
 
   init() {
+    window.addEventListener('beforeunload', this.onBeforeUnload);
     window.addEventListener('online', this.onOnline);
     window.addEventListener('offline', this.onOffline);
     document.addEventListener('visibilitychange', this.onVisibility);
     void this.load();
     return () => {
+      window.removeEventListener('beforeunload', this.onBeforeUnload);
       window.removeEventListener('online', this.onOnline);
       window.removeEventListener('offline', this.onOffline);
       document.removeEventListener('visibilitychange', this.onVisibility);
       this.stopPolling();
     };
   }
+
+  /** Warn before leaving while a change is still being saved. */
+  private onBeforeUnload = (e: BeforeUnloadEvent) => {
+    if (Object.keys(this.state.pending).length || this.state.undoPending) e.preventDefault();
+  };
 
   private onOnline = () => {
     this.set({ online: true });
@@ -409,6 +416,19 @@ export class LoopStore {
       (x) => ({ ...x, ...body }),
       () => api<LoopMutationResponse>(`/loops/${id}`, { method: 'PATCH', body }),
       'save',
+    );
+  }
+
+  /** Move when a loop started: the running session's start, or when it was opened. */
+  retime(id: string, startedAt: number) {
+    return this.mutate(
+      id,
+      (l) =>
+        l.state === 'running'
+          ? { ...l, runningSince: startedAt, createdAt: Math.min(l.createdAt, startedAt) }
+          : { ...l, createdAt: startedAt },
+      () => api<LoopMutationResponse>(`/loops/${id}/retime`, { method: 'POST', body: { startedAt } }),
+      'change start time',
     );
   }
 

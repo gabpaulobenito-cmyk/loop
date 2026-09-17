@@ -256,6 +256,94 @@ test.describe('row opens the details pop-up', () => {
   }
 });
 
+test.describe('edit start time', () => {
+  for (const width of [1280, 393, 220]) {
+    test(`backdate a running loop with the calendar at ${width}px, then undo`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 900 });
+      await login(page);
+      await resetData(page.request);
+      const title = `Backdate ${width} ${Date.now()}`;
+      await page.request.post('/api/loops', { headers: H, data: { id: crypto.randomUUID(), title, start: true } });
+      await page.reload();
+
+      const row = page.locator('[data-row]', { hasText: title });
+      await row.click({ position: { x: 4, y: 4 } });
+      const dialog = page.getByRole('dialog', { name: 'Loop details' });
+      await dialog.getByRole('button', { name: 'EDIT START' }).click();
+      const editor = dialog.getByRole('group', { name: 'Edit when this session started' });
+      await expect(editor).toBeVisible();
+      await expect(editor.getByRole('grid', { name: 'Choose a date' })).toBeVisible();
+      const box = (await dialog.boundingBox())!;
+      expect(box.x + box.width).toBeLessThanOrEqual(width + 0.5);
+
+      // Future days can't be picked.
+      const tomorrow = new Date();
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      const tomorrowCell = editor.getByRole('gridcell', { name: tomorrow.toDateString() });
+      if (await tomorrowCell.count()) await expect(tomorrowCell).toBeDisabled();
+
+      await editor.getByRole('button', { name: '3H AGO' }).click();
+      await expect(editor).toContainText('TIMER → 03:00');
+      await editor.getByRole('button', { name: /SAVE START/ }).click();
+      await expect(editor).toHaveCount(0);
+
+      // The row timer now counts from three hours ago, and it persists.
+      await expect(row.locator('.row__timer')).toHaveText(/^03:00/);
+      await expect
+        .poll(async () => {
+          const st = await (await page.request.get('/api/state', { headers: H })).json();
+          const l = st.loops.find((x: { title: string }) => x.title === title);
+          return Math.round((st.serverNow - l.runningSince) / 60_000);
+        })
+        .toBeGreaterThanOrEqual(179);
+      await page.keyboard.press('Escape');
+      await page.reload();
+      await expect(row.locator('.row__timer')).toHaveText(/^03:00/);
+
+      await page.getByRole('button', { name: /^Undo: Moved start of/ }).click();
+      await expect(row.locator('.row__timer')).toHaveText(/^00:/);
+    });
+  }
+
+  test('pick a date and time for when an open loop was opened', async ({ page }) => {
+    await page.setViewportSize({ width: 1024, height: 900 });
+    await login(page);
+    await resetData(page.request);
+    const title = `Opened earlier ${Date.now()}`;
+    await page.request.post('/api/loops', { headers: H, data: { id: crypto.randomUUID(), title } });
+    await page.reload();
+
+    const row = page.locator('[data-row]', { hasText: title });
+    await row.click({ position: { x: 4, y: 4 } });
+    const dialog = page.getByRole('dialog', { name: 'Loop details' });
+    await dialog.getByRole('button', { name: 'EDIT START' }).click();
+    const editor = dialog.getByRole('group', { name: 'Edit when this loop was opened' });
+
+    const target = new Date();
+    target.setDate(target.getDate() - 3);
+    if (target.getMonth() !== new Date().getMonth()) await editor.getByRole('button', { name: 'Previous month' }).click();
+    await editor.getByRole('gridcell', { name: target.toDateString() }).click();
+    await editor.getByLabel('// TIME').fill('09:30');
+    await expect(editor).toContainText('OPEN FOR → 3 days');
+    await editor.getByLabel('// TIME').press('Enter');
+    await expect(editor).toHaveCount(0);
+    await expect(dialog.locator('.insp-stats')).toContainText('3 days');
+    await expect
+      .poll(async () => {
+        const st = await (await page.request.get('/api/state', { headers: H })).json();
+        return st.undo?.label ?? '';
+      })
+      .toMatch(/^Moved start of/);
+    await page.keyboard.press('Escape');
+    await expect(row.locator('.row__age')).toHaveText('3 days');
+
+    const s = await (await page.request.get('/api/state', { headers: H })).json();
+    const l = s.loops.find((x: { title: string }) => x.title === title);
+    const opened = new Date(l.createdAt);
+    expect([opened.getDate(), opened.getHours(), opened.getMinutes()]).toEqual([target.getDate(), 9, 30]);
+  });
+});
+
 test.describe('slow network', () => {
   test.use({ viewport: { width: 1024, height: 800 } });
 

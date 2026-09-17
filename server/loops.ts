@@ -13,7 +13,7 @@ import {
   type UndoTop,
 } from '../shared/types';
 
-type ActionKind = 'create' | 'start' | 'stop' | 'close' | 'reopen' | 'priority' | 'edit' | 'delete';
+type ActionKind = 'create' | 'start' | 'stop' | 'close' | 'reopen' | 'priority' | 'edit' | 'delete' | 'retime';
 
 interface LoopRow {
   id: string;
@@ -41,6 +41,10 @@ interface Snapshot {
   runningSince: number | null;
   accumulatedMs: number;
   version: number;
+  /** Present on snapshots taken after created time became editable. */
+  createdAt?: number;
+  /** Original start of a session moved by a retime action. */
+  sessionStart?: { id: string; startedAt: number };
 }
 
 const ms = (d: Date | null) => (d ? d.getTime() : null);
@@ -76,6 +80,7 @@ function snapshot(r: LoopRow): Snapshot {
     runningSince: ms(r.running_since),
     accumulatedMs: Number(r.accumulated_ms),
     version: r.version,
+    createdAt: r.created_at.getTime(),
   };
 }
 
@@ -134,6 +139,7 @@ interface Action {
   label: string;
   sessionStartedId?: string;
   sessionEndedId?: string;
+  sessionStart?: { id: string; startedAt: number };
 }
 
 async function lockLoop(c: Client, id: string, includeDeleted = false): Promise<LoopRow> {
@@ -143,6 +149,7 @@ async function lockLoop(c: Client, id: string, includeDeleted = false): Promise<
 }
 
 async function recordAction(c: Client, loopId: string, before: Snapshot | null, action: Action, now: number) {
+  if (before && action.sessionStart) before = { ...before, sessionStart: action.sessionStart };
   const { rows } = await c.query<{ version: number }>('SELECT version FROM loops WHERE id = $1', [loopId]);
   await c.query(
     `INSERT INTO action_history (loop_id, kind, label, before, session_started_id, session_ended_id, loop_version_after, created_at)
@@ -309,6 +316,67 @@ export function updateLoop(
   });
 }
 
+const DAY = 86_400_000;
+const fmtWhen = (t: number) => new Date(t).toISOString().slice(0, 16).replace('T', ' ') + ' UTC';
+
+/**
+ * Move when a loop started.
+ * - Running: moves the current session's start (and the loop's created time
+ *   back with it if needed), so the timer reflects when work really began.
+ * - Open / closed: moves when the loop was first opened.
+ */
+export function retimeLoop(pool: Pool, id: string, startAt: number, now: number) {
+  return mutate(pool, id, now, async (c, row) => {
+    if (!Number.isFinite(startAt)) throw new HttpError(400, 'invalid_request', 'Invalid start time');
+    if (startAt > now + 60_000) throw new HttpError(400, 'start_in_future', 'Start time can’t be in the future');
+    if (startAt < now - 10 * 365 * DAY) throw new HttpError(400, 'start_too_old', 'Start time is too far in the past');
+    const target = Math.min(startAt, now);
+    const createdAt = row.created_at.getTime();
+
+    if (row.state === 'running') {
+      const since = row.running_since!.getTime();
+      if (target === since) return null;
+      const { rows: prev } = await c.query<{ ended: Date | null }>(
+        `SELECT max(ended_at) AS ended FROM loop_sessions WHERE loop_id = $1 AND ended_at IS NOT NULL`,
+        [id],
+      );
+      const prevEnd = prev[0]?.ended?.getTime();
+      if (prevEnd != null && target < prevEnd) {
+        throw new HttpError(400, 'overlaps_session', `Can’t start before the previous session ended (${fmtWhen(prevEnd)})`);
+      }
+      const { rows: open } = await c.query<{ id: string }>(
+        `UPDATE loop_sessions SET started_at = $2 WHERE loop_id = $1 AND ended_at IS NULL RETURNING id`,
+        [id, new Date(target)],
+      );
+      if (!open[0]) throw new HttpError(500, 'session_missing', 'Running session record is missing');
+      await c.query(
+        `UPDATE loops SET running_since = $2, created_at = LEAST(created_at, $2), version = version + 1, updated_at = $3 WHERE id = $1`,
+        [id, new Date(target), new Date(now)],
+      );
+      return { kind: 'retime', label: `Moved start of ${quote(row.title)}`, sessionStart: { id: open[0].id, startedAt: since } };
+    }
+
+    if (target === createdAt) return null;
+    const { rows: first } = await c.query<{ started: Date | null }>(
+      `SELECT min(started_at) AS started FROM loop_sessions WHERE loop_id = $1`,
+      [id],
+    );
+    const firstStart = first[0]?.started?.getTime();
+    if (firstStart != null && target > firstStart) {
+      throw new HttpError(400, 'after_first_session', `Can’t be later than its first session (${fmtWhen(firstStart)})`);
+    }
+    if (row.closed_at && target > row.closed_at.getTime()) {
+      throw new HttpError(400, 'after_close', 'Can’t be later than when it was closed');
+    }
+    await c.query(`UPDATE loops SET created_at = $2, version = version + 1, updated_at = $3 WHERE id = $1`, [
+      id,
+      new Date(target),
+      new Date(now),
+    ]);
+    return { kind: 'retime', label: `Moved start of ${quote(row.title)}` };
+  });
+}
+
 /**
  * Delete a loop. It disappears everywhere at once, but the row is kept for a
  * while so the action can be undone. A running session is finalized first.
@@ -365,6 +433,12 @@ export async function undoLast(pool: Pool, now: number): Promise<MutationResult>
       throw new HttpError(409, 'undo_conflict', 'This loop changed since that action; it can no longer be undone');
     }
     const b = h.before;
+    if (b.sessionStart) {
+      await c.query('UPDATE loop_sessions SET started_at = $2 WHERE id = $1', [b.sessionStart.id, new Date(b.sessionStart.startedAt)]);
+    }
+    if (b.createdAt != null) {
+      await c.query('UPDATE loops SET created_at = $2 WHERE id = $1', [h.loop_id, new Date(b.createdAt)]);
+    }
     if (h.session_started_id) {
       await c.query('DELETE FROM loop_sessions WHERE id = $1', [h.session_started_id]);
     }

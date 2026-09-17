@@ -4,6 +4,7 @@ import { currentSessionMs, elapsedMs } from '../../shared/timer';
 import type { Loop, Session } from '../../shared/types';
 import { api } from '../lib/api';
 import { Marker } from './Marker';
+import { StartEditor } from './StartEditor';
 
 
 export interface InspectorActions {
@@ -13,6 +14,7 @@ export interface InspectorActions {
   priority: (id: string) => void;
   edit: (id: string, patch: { title?: string; note?: string }) => Promise<boolean>;
   remove: (id: string) => void;
+  retime: (id: string, startedAt: number) => void;
 }
 
 interface Props {
@@ -64,7 +66,11 @@ export function Inspector({ loop, now, pending, keysEnabled, onDismiss, actions 
   const sessions = useSessions(loop);
   // Deleting takes a second click so a stray tap can't remove a loop.
   const [confirmDelete, setConfirmDelete] = useState(false);
-  useEffect(() => setConfirmDelete(false), [loop?.id]);
+  const [editingStart, setEditingStart] = useState(false);
+  useEffect(() => {
+    setConfirmDelete(false);
+    setEditingStart(false);
+  }, [loop?.id]);
   useEffect(() => {
     if (!confirmDelete) return;
     const t = setTimeout(() => setConfirmDelete(false), 4000);
@@ -103,7 +109,7 @@ export function Inspector({ loop, now, pending, keysEnabled, onDismiss, actions 
 
   // Inspector shortcuts: S start/stop, P priority, E rename, N note, ⌫ close.
   useEffect(() => {
-    if (!keysEnabled || !loop) return;
+    if (!keysEnabled || !loop || editingStart) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.metaKey || e.ctrlKey || e.altKey || e.defaultPrevented) return;
       const t = e.target as HTMLElement;
@@ -187,6 +193,13 @@ export function Inspector({ loop, now, pending, keysEnabled, onDismiss, actions 
     ...(!closed ? [{ key: 'priority', label: 'PRIORITY', pressed: loop.priority, run: () => actions.priority(loop.id) }] : []),
     { key: 'rename', label: 'RENAME', title: 'Rename (E)', run: () => beginEdit('title') },
     { key: 'note', label: loop.note ? 'NOTE' : 'ADD NOTE', run: () => beginEdit('note') },
+    {
+      key: 'start',
+      label: 'EDIT START',
+      pressed: editingStart,
+      title: running ? 'Change when this session really started' : 'Change when this loop was opened',
+      run: () => setEditingStart((v) => !v),
+    },
     {
       key: 'delete',
       label: confirmDelete ? 'CONFIRM' : 'DELETE',
@@ -287,6 +300,7 @@ export function Inspector({ loop, now, pending, keysEnabled, onDismiss, actions 
             type="button"
             className={`insp-act${act.main ? ' insp-act--main' : ''}${act.confirming ? ' is-confirming' : ''}`}
             aria-pressed={act.pressed}
+            data-key={act.key}
             title={act.title}
             onClick={act.run}
           >
@@ -295,6 +309,21 @@ export function Inspector({ loop, now, pending, keysEnabled, onDismiss, actions 
         ))}
       </div>
 
+      {editingStart ? (
+        <div className="inspector__scroll">
+          <StartEditor
+            loop={loop}
+            sessions={sessions?.sessions ?? null}
+            now={now}
+            onCancel={() => setEditingStart(false)}
+            onSave={(at) => {
+              setEditingStart(false);
+              actions.retime(loop.id, at);
+            }}
+          />
+        </div>
+      ) : (
+        <>
       <div className="insp-stats">
         {stats.map((s) => (
           <div key={s.label} className="insp-stat">
@@ -338,7 +367,8 @@ export function Inspector({ loop, now, pending, keysEnabled, onDismiss, actions 
           </ul>
         )}
       </div>
-
+        </>
+      )}
     </section>
   );
 }

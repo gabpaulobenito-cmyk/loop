@@ -212,6 +212,76 @@ describe('priority and edits', () => {
   });
 });
 
+describe('edit start time', () => {
+  const retime = (id: string, startedAt: number) => post(`/api/loops/${id}/retime`, { startedAt });
+
+  it('moves a running session back so the timer reflects when work really began', async () => {
+    const l = await create('Remembered late', { start: true });
+    clock.advance(2 * M);
+    const r = await retime(l.id, clock.now() - 3 * H).expect(200);
+    expect(r.body.loop.runningSince).toBe(clock.now() - 3 * H);
+    // Created time follows the start back.
+    expect(r.body.loop.createdAt).toBe(clock.now() - 3 * H);
+    expect(r.body.undo.label).toBe('Moved start of Remembered late');
+    const s = await sessions(l.id);
+    expect(s[0].startedAt).toBe(clock.now() - 3 * H);
+
+    // Stopping accumulates the full backdated session.
+    clock.advance(M);
+    const stopped = await post(`/api/loops/${l.id}/stop`).expect(200);
+    expect(stopped.body.loop.accumulatedMs).toBe(3 * H + M);
+  });
+
+  it('can move a running start later, but not before the previous session ended', async () => {
+    const l = await create('Two sessions', { start: true });
+    clock.advance(30 * M);
+    await post(`/api/loops/${l.id}/stop`).expect(200);
+    const endedAt = clock.now();
+    clock.advance(H);
+    await post(`/api/loops/${l.id}/start`).expect(200);
+    clock.advance(10 * M);
+
+    const bad = await retime(l.id, endedAt - M).expect(400);
+    expect(bad.body.error.code).toBe('overlaps_session');
+    const ok = await retime(l.id, endedAt + 5 * M).expect(200);
+    expect(ok.body.loop.runningSince).toBe(endedAt + 5 * M);
+    expect(ok.body.loop.accumulatedMs).toBe(30 * M);
+  });
+
+  it('backdates when an open loop was opened', async () => {
+    const l = await create('On my mind');
+    const r = await retime(l.id, clock.now() - 5 * 24 * H).expect(200);
+    expect(r.body.loop).toMatchObject({ state: 'open', createdAt: clock.now() - 5 * 24 * H, runningSince: null });
+  });
+
+  it('refuses an open-loop start after its first session', async () => {
+    const l = await create('Has history', { start: true });
+    const firstStart = clock.now();
+    clock.advance(20 * M);
+    await post(`/api/loops/${l.id}/stop`).expect(200);
+    const r = await retime(l.id, firstStart + M).expect(400);
+    expect(r.body.error.code).toBe('after_first_session');
+  });
+
+  it('rejects future and malformed times', async () => {
+    const l = await create('Validation');
+    expect((await retime(l.id, clock.now() + H).expect(400)).body.error.code).toBe('start_in_future');
+    await post(`/api/loops/${l.id}/retime`, { startedAt: 'yesterday' }).expect(400);
+    await post(`/api/loops/${l.id}/retime`, {}).expect(400);
+  });
+
+  it('undo restores the original session start and created time', async () => {
+    const l = await create('Undo retime', { start: true });
+    const originalStart = clock.now();
+    clock.advance(5 * M);
+    await retime(l.id, clock.now() - 2 * H).expect(200);
+    const r = await post('/api/undo').expect(200);
+    expect(r.body.loop).toMatchObject({ runningSince: originalStart, createdAt: originalStart, state: 'running' });
+    const s = await sessions(l.id);
+    expect(s[0].startedAt).toBe(originalStart);
+  });
+});
+
 describe('delete', () => {
   const del = (id: string) => agent.delete(`/api/loops/${id}`).set('x-loop-client', '1');
 

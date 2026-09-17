@@ -48,6 +48,7 @@ const settingsSchema = z
   })
   .strict();
 const idParam = z.uuid();
+const retimeSchema = z.object({ startedAt: z.number().int().positive() }).strict();
 
 function parse<T>(schema: z.ZodType<T>, value: unknown): T {
   const r = schema.safeParse(value);
@@ -163,6 +164,15 @@ export function createApp(opts: AppOptions) {
       }),
     );
   }
+
+  api.post(
+    '/loops/:id/retime',
+    wrap(async (req, res) => {
+      const id = parse(idParam, req.params.id);
+      const { startedAt } = parse(retimeSchema, req.body);
+      send(res, await loops.retimeLoop(pool, id, startedAt, clock()));
+    }),
+  );
 
   api.delete(
     '/loops/:id',

@@ -68,7 +68,8 @@ Reversible actions (create, start/resume, stop, close, reopen, priority, rename,
 | Row | Opens the loop's details pop-up. Never changes its state. |
 | ▶ / ■ / ↺ button | Start, stop, or reopen. This is the only way a row changes state. |
 | + / NEW LOOP / `N` | New-loop pop-up: large title and note. `⏎` creates and starts, `⇧⏎` adds without starting. |
-| Details pop-up | Start/stop, **CLOSE LOOP**, PRIORITY, RENAME, NOTE, DELETE (two clicks), full session history |
+| Details pop-up | Start/stop, **CLOSE LOOP**, PRIORITY, RENAME, NOTE, **EDIT START**, DELETE (two clicks), full session history |
+| EDIT START | Calendar + time picker. On a running loop it moves the current session's start (the timer counts from then). On an open or closed loop it moves when the loop was opened. It can't overlap the previous session or be set in the future, and it can be undone. |
 
 Closing and deleting only happen inside the details pop-up, so a stray tap on a row can't trigger them. Both can be undone.
 
