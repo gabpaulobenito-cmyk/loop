@@ -18,7 +18,6 @@ import {
   SortButtons,
 } from './Chrome';
 import { Inspector, type InspectorActions } from './Inspector';
-import { LoopMenu, type LoopMenuAction } from './LoopMenu';
 import { LoopRow, type RowActions, type RowVariant } from './LoopRow';
 
 type Tab = 'all' | 'running' | 'open' | 'closed';
@@ -33,11 +32,6 @@ function readTab(): Tab {
     // ignore
   }
   return 'all';
-}
-
-/** Return focus to a row's ⋮ button after its menu or editor closes. */
-function focusMore(id: string) {
-  requestAnimationFrame(() => document.querySelector<HTMLElement>(`[data-row="${id}"] [data-ctl="more"]`)?.focus());
 }
 
 const isTyping = (el: EventTarget | null) =>
@@ -57,8 +51,6 @@ export function Workspace() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [overlay, setOverlay] = useState(false);
-  const [rowMenu, setRowMenu] = useState<{ id: string; anchor: HTMLElement } | null>(null);
-  const [editing, setEditing] = useState<{ id: string; field: 'title' | 'note' } | null>(null);
 
   const searchRef = useRef<HTMLInputElement>(null);
   const captureRef = useRef<HTMLInputElement>(null);
@@ -118,31 +110,11 @@ export function Workspace() {
         setSelectedId(id);
         setOverlay(true);
       },
-      menu: (id, anchor) => setRowMenu({ id, anchor }),
-      saveEdit: (id, field, value) => {
-        setEditing(null);
-        void store.edit(id, { [field]: value });
-        focusMore(id);
-      },
-      cancelEdit: (id) => {
-        setEditing(null);
-        focusMore(id);
-      },
     }),
     [],
   );
 
-  const onLoopMenu = (action: LoopMenuAction) => {
-    if (!rowMenu) return;
-    const { id } = rowMenu;
-    setRowMenu(null);
-    if (action === 'edit-title') setEditing({ id, field: 'title' });
-    else if (action === 'edit-note') setEditing({ id, field: 'note' });
-    else if (action === 'delete') {
-      if (selectedId === id) setOverlay(false);
-      void store.remove(id);
-    }
-  };
+
   const inspectorActions = useMemo<InspectorActions>(
     () => ({
       toggle: (id) => void store.toggle(id),
@@ -150,6 +122,10 @@ export function Workspace() {
       close: (id) => void store.close(id),
       priority: (id) => void store.togglePriority(id),
       edit: (id, patch) => store.edit(id, patch),
+      remove: (id) => {
+        setOverlay(false);
+        void store.remove(id);
+      },
     }),
     [],
   );
@@ -186,7 +162,6 @@ export function Workspace() {
       const mod = e.metaKey || e.ctrlKey;
       const k = e.key.toLowerCase();
       if (e.key === 'Escape') {
-        if (rowMenu) return setRowMenu(null);
         if (menuOpen) return setMenuOpen(false);
         if (captureOpen) return setCaptureOpen(false);
         if (overlay && mode !== 'wide') return setOverlay(false);
@@ -198,7 +173,7 @@ export function Workspace() {
         e.preventDefault();
         return openSearch();
       }
-      if (isTyping(e.target) || captureOpen || menuOpen || rowMenu || editing) return;
+      if (isTyping(e.target) || captureOpen || menuOpen) return;
       if ((mod && k === 'n') || (!mod && !e.shiftKey && k === 'n')) {
         e.preventDefault();
         return openNew();
@@ -214,7 +189,7 @@ export function Workspace() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [menuOpen, rowMenu, editing, captureOpen, overlay, mode, compact, searchOpen, query, openNew, openSearch]);
+  }, [menuOpen, captureOpen, overlay, mode, compact, searchOpen, query, openNew, openSearch]);
 
   // ── Rendering helpers ───────────────────────────────────────────────────
   const rows = (list: Loop[], label: string) => (
@@ -227,8 +202,6 @@ export function Workspace() {
           now={now}
           pending={!!s.pending[l.id]}
           selected={inspectorVisible && l.id === selectedId}
-          menuOpen={rowMenu?.id === l.id}
-          editing={editing?.id === l.id ? editing.field : null}
           actions={rowActions}
         />
       ))}
@@ -556,13 +529,13 @@ export function Workspace() {
     />
   );
 
-  const inspectorFor = (variant: 'panel' | 'drawer' | 'sheet', onDismiss?: () => void) => (
+  const inspectorFor = (variant: 'panel' | 'drawer', onDismiss?: () => void) => (
     <Inspector
       loop={selected}
       now={now}
       variant={variant}
       pending={selected ? !!s.pending[selected.id] : false}
-      keysEnabled={!captureOpen && !menuOpen && !rowMenu && !editing}
+      keysEnabled={!captureOpen && !menuOpen}
       onDismiss={onDismiss}
       actions={inspectorActions}
     />
@@ -609,18 +582,13 @@ export function Workspace() {
       </div>
       {statusBar}
 
-      {mode === 'desk' && overlay && selected && (
+      {mode !== 'wide' && overlay && selected && (
         <>
           <div className="scrim" onClick={() => setOverlay(false)} />
-          <div className="insp-drawer" role="dialog" aria-modal="true" aria-label="Session detail">
+          <div className={`insp-drawer insp-drawer--${mode}`} role="dialog" aria-modal="true" aria-label="Session detail">
             {inspectorFor('drawer', () => setOverlay(false))}
           </div>
         </>
-      )}
-      {compact && overlay && selected && (
-        <div className="insp-sheet" role="dialog" aria-modal="true" aria-label="Session detail">
-          {inspectorFor('sheet', () => setOverlay(false))}
-        </div>
       )}
       {captureOpen && (
         <CaptureDialog
@@ -632,18 +600,6 @@ export function Workspace() {
         />
       )}
       {menu}
-      {rowMenu && s.loops.some((l) => l.id === rowMenu.id) && (
-        <LoopMenu
-          loop={s.loops.find((l) => l.id === rowMenu.id)!}
-          anchor={rowMenu.anchor}
-          onAction={onLoopMenu}
-          onClose={() => {
-            const id = rowMenu.id;
-            setRowMenu(null);
-            focusMore(id);
-          }}
-        />
-      )}
     </div>
   );
 }

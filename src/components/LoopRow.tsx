@@ -5,7 +5,6 @@ import type { Loop } from '../../shared/types';
 import { Marker } from './Marker';
 import { Marquee } from './Marquee';
 import { MoreButton, ToggleButton } from './Glyphs';
-import { RowEdit } from './RowEdit';
 
 export type RowVariant = 'desk' | 'rail' | 'mobile';
 
@@ -14,9 +13,6 @@ export interface RowActions {
   reopen: (id: string) => void;
   priority: (id: string) => void;
   inspect: (id: string) => void;
-  menu: (id: string, anchor: HTMLElement) => void;
-  saveEdit: (id: string, field: 'title' | 'note', value: string) => void;
-  cancelEdit: (id: string) => void;
 }
 
 interface Props {
@@ -25,8 +21,6 @@ interface Props {
   now: number;
   pending: boolean;
   selected: boolean;
-  menuOpen: boolean;
-  editing: 'title' | 'note' | null;
   actions: RowActions;
 }
 
@@ -50,7 +44,7 @@ function onRowKeyDown(e: KeyboardEvent<HTMLLIElement>) {
   target?.focus();
 }
 
-function LoopRowImpl({ loop, variant, now, pending, selected, menuOpen, editing, actions }: Props) {
+function LoopRowImpl({ loop, variant, now, pending, selected, actions }: Props) {
   const { id, state, title, note, priority } = loop;
   const running = state === 'running';
   const closed = state === 'closed';
@@ -107,7 +101,7 @@ function LoopRowImpl({ loop, variant, now, pending, selected, menuOpen, editing,
         onToggle={() => actions.toggle(id)}
         onReopen={() => actions.reopen(id)}
       />
-      <MoreButton title={title} size={size} expanded={menuOpen} onOpen={(el) => actions.menu(id, el)} />
+      <MoreButton title={title} size={size} expanded={selected} onOpen={() => actions.inspect(id)} />
     </>
   );
   const common = {
@@ -120,21 +114,6 @@ function LoopRowImpl({ loop, variant, now, pending, selected, menuOpen, editing,
     onClick: onRowClick,
     onKeyDown: onRowKeyDown,
   } as const;
-
-  if (editing) {
-    return (
-      <li {...common} className={`${cls} is-editing`} onClick={undefined} onKeyDown={undefined}>
-        <Marker loop={loop} />
-        <RowEdit
-          field={editing}
-          initial={editing === 'title' ? title : note}
-          compact={variant === 'rail'}
-          onSave={(value) => actions.saveEdit(id, editing, value)}
-          onCancel={() => actions.cancelEdit(id)}
-        />
-      </li>
-    );
-  }
 
   if (variant === 'rail') {
     return (
@@ -212,8 +191,6 @@ export const LoopRow = memo(LoopRowImpl, (a, b) => {
     a.variant !== b.variant ||
     a.pending !== b.pending ||
     a.selected !== b.selected ||
-    a.menuOpen !== b.menuOpen ||
-    a.editing !== b.editing ||
     a.actions !== b.actions
   ) {
     return false;

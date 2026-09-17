@@ -64,7 +64,7 @@ test('production lifecycle, persistence, timers and layouts', async ({ page }) =
     const inspector = page.getByRole('dialog', { name: 'Session detail' });
     await expect(inspector.getByRole('list', { name: 'Session history' }).locator('li')).toHaveCount(2);
     await inspector.getByRole('button', { name: /CLOSE LOOP/ }).click();
-    await expect(inspector.getByRole('button', { name: /REOPEN LOOP/ })).toBeVisible();
+    await expect(inspector.getByRole('button', { name: /REOPEN/ }).first()).toBeVisible();
     await expect(inspector.getByText('→ NOW')).toHaveCount(0);
     await page.keyboard.press('Escape');
 

@@ -5,7 +5,7 @@ import type { Loop, Session } from '../../shared/types';
 import { api } from '../lib/api';
 import { Marker } from './Marker';
 
-export type InspectorVariant = 'panel' | 'drawer' | 'sheet';
+export type InspectorVariant = 'panel' | 'drawer';
 
 export interface InspectorActions {
   toggle: (id: string) => void;
@@ -13,6 +13,7 @@ export interface InspectorActions {
   close: (id: string) => void;
   priority: (id: string) => void;
   edit: (id: string, patch: { title?: string; note?: string }) => Promise<boolean>;
+  remove: (id: string) => void;
 }
 
 interface Props {
@@ -63,6 +64,14 @@ export function Inspector({ loop, now, variant, pending, keysEnabled, onDismiss,
   // Source of truth for the active edit, so blur-after-Escape cannot save.
   const editingRef = useRef<'title' | 'note' | null>(null);
   const sessions = useSessions(loop);
+  // Deleting takes a second click so a stray tap can't remove a loop.
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  useEffect(() => setConfirmDelete(false), [loop?.id]);
+  useEffect(() => {
+    if (!confirmDelete) return;
+    const t = setTimeout(() => setConfirmDelete(false), 4000);
+    return () => clearTimeout(t);
+  }, [confirmDelete]);
 
   const setEdit = (field: 'title' | 'note' | null) => {
     editingRef.current = field;
@@ -165,6 +174,33 @@ export function Inspector({ loop, now, variant, pending, keysEnabled, onDismiss,
     { label: 'SESSIONS', value: pad2(count), cls: '' },
   ];
 
+  // Actions shown under the title. Add entries here to extend the detail view.
+  const loopActions: { key: string; label: string; run: () => void; main?: boolean; pressed?: boolean; confirming?: boolean; title?: string }[] = [
+    closed
+      ? { key: 'reopen', label: 'REOPEN ↺', main: true, run: () => actions.reopen(loop.id) }
+      : {
+          key: 'close',
+          label: 'CLOSE LOOP',
+          main: true,
+          title: running ? 'Stops the running session, then closes (⌫)' : 'Close this loop (⌫)',
+          run: () => actions.close(loop.id),
+        },
+    ...(!closed ? [{ key: 'priority', label: 'PRIORITY', pressed: loop.priority, run: () => actions.priority(loop.id) }] : []),
+    { key: 'rename', label: 'RENAME', title: 'Rename (E)', run: () => beginEdit('title') },
+    { key: 'note', label: loop.note ? 'NOTE' : 'ADD NOTE', run: () => beginEdit('note') },
+    {
+      key: 'delete',
+      label: confirmDelete ? 'CONFIRM' : 'DELETE',
+      confirming: confirmDelete,
+      title: confirmDelete ? 'Click again to delete this loop' : 'Delete this loop',
+      run: () => {
+        if (!confirmDelete) return setConfirmDelete(true);
+        setConfirmDelete(false);
+        actions.remove(loop.id);
+      },
+    },
+  ];
+
   const editKeys = (e: ReactKeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
       e.preventDefault();
@@ -237,6 +273,21 @@ export function Inspector({ loop, now, variant, pending, keysEnabled, onDismiss,
         {dismiss}
       </div>
 
+      <div className="insp-actions" role="group" aria-label="Loop actions">
+        {loopActions.map((act) => (
+          <button
+            key={act.key}
+            type="button"
+            className={`insp-act${act.main ? ' insp-act--main' : ''}${act.confirming ? ' is-confirming' : ''}`}
+            aria-pressed={act.pressed}
+            title={act.title}
+            onClick={act.run}
+          >
+            {act.label}
+          </button>
+        ))}
+      </div>
+
       <div className="insp-stats">
         {stats.map((s) => (
           <div key={s.label} className="insp-stat">
@@ -281,40 +332,6 @@ export function Inspector({ loop, now, variant, pending, keysEnabled, onDismiss,
         )}
       </div>
 
-      <div className="insp-foot">
-        {closed ? (
-          <button type="button" className="insp-foot__btn insp-foot__btn--main" onClick={() => actions.reopen(loop.id)}>
-            REOPEN LOOP ↺
-          </button>
-        ) : (
-          <button
-            type="button"
-            className="insp-foot__btn insp-foot__btn--main"
-           
-            onClick={() => actions.close(loop.id)}
-            title={running ? 'Stops the running session, then closes' : 'Close this loop'}
-          >
-            CLOSE LOOP ⌫
-          </button>
-        )}
-        {!closed && (
-          <button
-            type="button"
-            className="insp-foot__btn"
-            aria-pressed={loop.priority}
-           
-            onClick={() => actions.priority(loop.id)}
-          >
-            PRIORITY
-          </button>
-        )}
-        <button type="button" className="insp-foot__btn" onClick={() => beginEdit('title')}>
-          RENAME
-        </button>
-        <button type="button" className="insp-foot__btn" onClick={() => beginEdit('note')}>
-          NOTE
-        </button>
-      </div>
     </section>
   );
 }
