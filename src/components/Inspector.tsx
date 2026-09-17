@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
-import { fmtAge, fmtClock, fmtDay, fmtDuration, fmtHM, fmtTimer, pad2 } from '../../shared/format';
+import { fmtAge, fmtClock, fmtDay, fmtDuration, fmtHM, pad2 } from '../../shared/format';
 import { currentSessionMs, elapsedMs } from '../../shared/timer';
 import type { Loop, Session } from '../../shared/types';
 import { api } from '../lib/api';
 import { Marker } from './Marker';
 import { StartEditor } from './StartEditor';
+import { TimerText } from './TimerText';
 
 
 export interface InspectorActions {
@@ -175,7 +176,11 @@ export function Inspector({ loop, now, pending, keysEnabled, onDismiss, actions 
     closed
       ? { label: 'CLOSED', value: `${fmtAge(now - (loop.closedAt ?? now))} ago`, cls: '' }
       : { label: 'OPEN FOR', value: fmtAge(now - loop.createdAt), cls: '' },
-    { label: 'CURRENT SESSION', value: running ? fmtTimer(currentSessionMs(loop, now)) : '—', cls: running ? 'is-live' : 'is-dim' },
+    {
+      label: 'CURRENT SESSION',
+      value: running ? <TimerText ms={currentSessionMs(loop, now)} /> : '—',
+      cls: running ? 'is-live' : 'is-dim',
+    },
     { label: 'SESSIONS', value: pad2(count), cls: '' },
   ];
 
@@ -273,7 +278,7 @@ export function Inspector({ loop, now, pending, keysEnabled, onDismiss, actions 
           )}
         </div>
         <span className={`insp-head__timer${running ? ' is-running' : ''}`} aria-label={`Active time ${fmtHM(total)}`}>
-          {fmtTimer(total)}
+          <TimerText ms={total} />
         </span>
         {closed ? (
           <button type="button" className="insp-btn" onClick={() => actions.reopen(loop.id)} data-autofocus>
@@ -361,7 +366,7 @@ export function Inspector({ loop, now, pending, keysEnabled, onDismiss, actions 
                 <span className="sess__bar" aria-hidden="true">
                   <span className={`sess__fill${s.live ? ' is-live' : ''}`} style={{ width: `${Math.max(2, (s.dur / maxDur) * 100)}%` }} />
                 </span>
-                <span className={`sess__dur${s.live ? ' is-live' : ''}`}>{s.live ? fmtTimer(s.dur) : fmtDuration(s.dur)}</span>
+                <span className={`sess__dur${s.live ? ' is-live' : ''}`}>{s.live ? <TimerText ms={s.dur} /> : fmtDuration(s.dur)}</span>
               </li>
             ))}
           </ul>

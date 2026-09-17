@@ -1,5 +1,6 @@
 import { memo, type KeyboardEvent, type MouseEvent } from 'react';
-import { ageLevel, fmtAge, fmtHM, fmtTimer } from '../../shared/format';
+import { ageLevel, fmtAge, fmtHM } from '../../shared/format';
+import { TimerText } from './TimerText';
 import { elapsedMs } from '../../shared/timer';
 import type { Loop } from '../../shared/types';
 import { Marker } from './Marker';
@@ -80,7 +81,7 @@ function LoopRowImpl({ loop, variant, now, pending, selected, actions }: Props) 
     </button>
   );
 
-  const timer = (compact: boolean) => <span className="row__timer">{fmtTimer(total, { noSec: compact })}</span>;
+  const timer = () => <TimerText className="row__timer" ms={total} />;
   const ageLabel = <span className="row__age">{fmtAge(age)}</span>;
   const toggle = (size: 'xs' | 'sm' | 'md' | 'lg') => (
     <ToggleButton loop={loop} size={size} onToggle={() => actions.toggle(id)} onReopen={() => actions.reopen(id)} />
@@ -102,7 +103,7 @@ function LoopRowImpl({ loop, variant, now, pending, selected, actions }: Props) 
         <div className="row__line">
           <Marker loop={loop} />
           {titleBtn}
-          {running && timer(true)}
+          {running && timer()}
           {state === 'open' && ageLabel}
           {closed && <span className="row__closedat">{fmtAge(now - (loop.closedAt ?? now))}</span>}
           {toggle('xs')}
@@ -120,7 +121,7 @@ function LoopRowImpl({ loop, variant, now, pending, selected, actions }: Props) 
           {titleBtn}
           {note && <span className="row__note">{note}</span>}
         </div>
-        {running && timer(true)}
+        {running && timer()}
         {state === 'open' && ageLabel}
         {closed && <span className="row__closedat">{fmtAge(now - (loop.closedAt ?? now))} ago</span>}
         {toggle('lg')}
@@ -148,7 +149,7 @@ function LoopRowImpl({ loop, variant, now, pending, selected, actions }: Props) 
       {note ? <Marquee className="row__note" text={note} /> : <span className="row__note" />}
       <span className="row__div" aria-hidden="true" />
       {running ? (
-        timer(false)
+        timer()
       ) : (
         <>
           <span className="row__active" title="Active time">

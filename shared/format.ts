@@ -5,24 +5,29 @@ const HOUR = 3_600_000;
 const DAY = 86_400_000;
 
 /**
- * Running timer. Mirrors the V2 reference:
- *   mm:ss → hh:mm:ss → 1D hh:mm:ss → 7D hh:mm → 2MO 05D
- * `noSec` drops seconds for compact layouts.
+ * Timer segments: [months] [days] clock. Seconds always tick.
+ *   06:25 → 02:14:37 → 1D · 07:42:11 → 2MO · 16D · 03:12:45
+ * Months are 30-day blocks. `noSec` drops seconds for summary text only.
  */
-export function fmtTimer(ms: number, opts: { noSec?: boolean } = {}): string {
+export function timerParts(ms: number, opts: { noSec?: boolean } = {}): string[] {
   const secs = Math.max(0, Math.floor(ms / 1000));
-  const d = Math.floor(secs / 86400);
+  const totalDays = Math.floor(secs / 86400);
   const hh = Math.floor((secs % 86400) / 3600);
   const mm = Math.floor((secs % 3600) / 60);
   const ss = secs % 60;
-  if (d >= 60) {
-    const mo = Math.floor(d / 30);
-    return `${mo}MO ${p2(d - mo * 30)}D`;
-  }
-  if (d >= 7) return `${d}D ${p2(hh)}:${p2(mm)}`;
-  if (d >= 1) return opts.noSec ? `${d}D ${p2(hh)}:${p2(mm)}` : `${d}D ${p2(hh)}:${p2(mm)}:${p2(ss)}`;
-  if (secs >= 3600) return opts.noSec ? `${p2(hh)}:${p2(mm)}` : `${p2(hh)}:${p2(mm)}:${p2(ss)}`;
-  return `${p2(mm)}:${p2(ss)}`;
+  const mo = Math.floor(totalDays / 30);
+  const d = totalDays - mo * 30;
+  const parts: string[] = [];
+  if (mo > 0) parts.push(`${mo}MO`);
+  if (mo > 0 || d > 0) parts.push(`${d}D`);
+  if (parts.length || hh > 0) parts.push(opts.noSec ? `${p2(hh)}:${p2(mm)}` : `${p2(hh)}:${p2(mm)}:${p2(ss)}`);
+  else parts.push(`${p2(mm)}:${p2(ss)}`);
+  return parts;
+}
+
+/** Timer as text, segments separated by a middle dot. */
+export function fmtTimer(ms: number, opts: { noSec?: boolean } = {}): string {
+  return timerParts(ms, opts).join(' · ');
 }
 
 /** Accumulated duration label: "02H 14M" or "48M". */

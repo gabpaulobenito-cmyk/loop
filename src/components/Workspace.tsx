@@ -357,7 +357,7 @@ export function Workspace() {
   const systemNote = !s.online
     ? 'OFFLINE — TIMERS KEEP COUNTING · CHANGES PAUSED'
     : allRunning.length
-      ? `${allRunning.length} RUNNING · LONGEST ${fmtTimer(longest, { noSec: true })}`
+      ? `${allRunning.length} RUNNING · LONGEST ${fmtTimer(longest)}`
       : 'NOTHING RUNNING';
   const noteNode = s.notice ? (
     <span className="status__note status__note--alert" role="alert">

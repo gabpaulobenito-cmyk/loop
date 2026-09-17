@@ -200,6 +200,16 @@ ul {
   .hdr .search { width: 190px; }
 }
 
+/* Tiny dot between timer segments: 2MO · 16D · 03:12:45 */
+.tdot {
+  display: inline-block;
+  margin: 0 0.32em;
+  font-size: 0.8em;
+  opacity: 0.45;
+  transform: translateY(-0.04em);
+}
+.row--rail .tdot { margin: 0 0.18em; }
+
 /* ── Markers: exactly 6×6, always circular ─────────────────────────────── */
 
 .marker {

@@ -338,7 +338,7 @@ test.describe('edit start time', () => {
         return [l.sessionCount, Math.round((st.serverNow - l.runningSince) / 3_600_000)];
       })
       .toEqual([1, 24]);
-    await expect(row.locator('.row__timer')).toHaveText(/^1D 00:0/);
+    await expect(row.locator('.row__timer')).toHaveText(/^1D · 00:0/);
   });
 
   test('pick a date and time for when an open loop was opened', async ({ page }) => {
