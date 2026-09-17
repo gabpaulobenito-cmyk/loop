@@ -420,12 +420,17 @@ export class LoopStore {
   }
 
   /** Move when a loop started: the running session's start, or when it was opened. */
-  retime(id: string, startedAt: number) {
+  retime(id: string, startedAt: number, predictedAccumulatedMs?: number) {
     return this.mutate(
       id,
       (l) =>
         l.state === 'running'
-          ? { ...l, runningSince: startedAt, createdAt: Math.min(l.createdAt, startedAt) }
+          ? {
+              ...l,
+              runningSince: startedAt,
+              createdAt: Math.min(l.createdAt, startedAt),
+              accumulatedMs: predictedAccumulatedMs ?? l.accumulatedMs,
+            }
           : { ...l, createdAt: startedAt },
       () => api<LoopMutationResponse>(`/loops/${id}/retime`, { method: 'POST', body: { startedAt } }),
       'change start time',

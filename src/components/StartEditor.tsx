@@ -6,7 +6,7 @@ interface Props {
   loop: Loop;
   sessions: Session[] | null;
   now: number;
-  onSave: (at: number) => void;
+  onSave: (at: number, predictedAccumulatedMs?: number) => void;
   onCancel: () => void;
 }
 
@@ -36,34 +36,45 @@ export function StartEditor({ loop, sessions, now, onSave, onCancel }: Props) {
   const [time, setTime] = useState(() => toTime(initial));
   const [view, setView] = useState(() => new Date(new Date(initial).getFullYear(), new Date(initial).getMonth(), 1));
 
-  // Limits from the loop's own history, checked locally before saving.
-  const { floor, ceiling } = useMemo(() => {
+  // Open/closed loops can't start after their first session or their close.
+  const ceiling = useMemo(() => {
+    if (running) return null;
     const list = sessions ?? [];
-    if (running) {
-      const ended = list.filter((s) => s.endedAt != null).map((s) => s.endedAt!);
-      return { floor: ended.length ? Math.max(...ended) : null, ceiling: null as number | null };
-    }
     const firstStart = list.length ? Math.min(...list.map((s) => s.startedAt)) : null;
     const limits = [firstStart, loop.closedAt].filter((x): x is number => x != null);
-    return { floor: null as number | null, ceiling: limits.length ? Math.min(...limits) : null };
+    return limits.length ? Math.min(...limits) : null;
   }, [sessions, running, loop.closedAt]);
 
   const value = combine(day, time);
+
+  // Running loops: earlier sessions after the new start merge into the running one.
+  const merge = useMemo(() => {
+    if (!running || !sessions) return { count: 0, kept: loop.accumulatedMs };
+    let count = 0;
+    let kept = 0;
+    for (const s of sessions) {
+      if (s.endedAt == null) continue;
+      if (s.endedAt > value) count++;
+      kept += Math.max(0, Math.min(s.endedAt, value) - s.startedAt);
+    }
+    return { count, kept };
+  }, [running, sessions, value, loop.accumulatedMs]);
+
   const error =
     value > now + MIN
       ? 'Can’t be in the future'
-      : floor != null && value < floor
-        ? `Must be after the previous session ended (${fmtDay(floor, now)} ${fmtClock(floor)})`
-        : ceiling != null && value > ceiling
-          ? `Must be before its first session (${fmtDay(ceiling, now)} ${fmtClock(ceiling)})`
-          : null;
+      : ceiling != null && value > ceiling
+        ? `Must be on or before its first session (${fmtDay(ceiling, now)} ${fmtClock(ceiling)})`
+        : null;
 
   const preview = running
-    ? `TIMER → ${fmtTimer(loop.accumulatedMs + Math.max(0, now - value))}`
+    ? `TIMER → ${fmtTimer(merge.kept + Math.max(0, now - value))}`
     : `OPEN FOR → ${fmtAge(Math.max(0, now - value))}`;
+  const mergeNote =
+    running && merge.count > 0 ? `Merges ${merge.count} earlier session${merge.count === 1 ? '' : 's'} into this one` : null;
 
   const save = () => {
-    if (!error) onSave(Math.min(value, now));
+    if (!error) onSave(Math.min(value, now), running ? merge.kept : undefined);
   };
 
   const setFrom = (t: number) => {
@@ -188,10 +199,13 @@ export function StartEditor({ loop, sessions, now, onSave, onCancel }: Props) {
           value={time}
           onChange={(e) => e.target.value && setTime(e.target.value)}
         />
-        <span className={`start-edit__preview${error ? ' is-error' : ''}`} role={error ? 'alert' : undefined}>
-          {error ?? preview}
-        </span>
+        <span className="start-edit__preview">{preview}</span>
       </div>
+      {(error || mergeNote) && (
+        <div className={`start-edit__notice${error ? ' is-error' : ''}`} role={error ? 'alert' : 'status'}>
+          {error ? `! ${error}` : `↳ ${mergeNote}`}
+        </div>
+      )}
 
       <div className="start-edit__foot">
         <button type="button" className="start-edit__cancel" onClick={onCancel}>

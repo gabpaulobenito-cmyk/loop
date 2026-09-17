@@ -232,20 +232,68 @@ describe('edit start time', () => {
     expect(stopped.body.loop.accumulatedMs).toBe(3 * H + M);
   });
 
-  it('can move a running start later, but not before the previous session ended', async () => {
-    const l = await create('Two sessions', { start: true });
-    clock.advance(30 * M);
+  it('backdating a running loop past earlier sessions absorbs them (the Nexplay Web Dev case)', async () => {
+    // Several short sessions today, then a running one.
+    const l = await create('Nexplay Web Dev', { start: true });
+    const day = clock.now();
+    clock.advance(4_000);
     await post(`/api/loops/${l.id}/stop`).expect(200);
-    const endedAt = clock.now();
-    clock.advance(H);
+    for (const [gap, run] of [[2_000, 108 * M], [13_000, 20_000], [20_000, 3_000]] as const) {
+      clock.advance(gap);
+      await post(`/api/loops/${l.id}/start`).expect(200);
+      clock.advance(run);
+      await post(`/api/loops/${l.id}/stop`).expect(200);
+    }
+    clock.advance(45_000);
+    await post(`/api/loops/${l.id}/start`).expect(200);
+    clock.advance(81_000);
+    const before = await sessions(l.id);
+    expect(before).toHaveLength(5);
+
+    // Really started 8 days ago.
+    const target = day - 8 * 24 * H;
+    const r = await retime(l.id, target).expect(200);
+    expect(r.body.loop).toMatchObject({ state: 'running', runningSince: target, createdAt: target, accumulatedMs: 0 });
+    expect(r.body.undo.label).toBe('Moved start of Nexplay Web Dev (merged 4 sessions)');
+    const after = await sessions(l.id);
+    expect(after).toHaveLength(1);
+    expect(after[0]).toMatchObject({ startedAt: target, endedAt: null });
+
+    // Undo puts every session back exactly.
+    const u = await post('/api/undo').expect(200);
+    expect(u.body.loop.accumulatedMs).toBe(before.filter((x) => x.endedAt).reduce((a, x) => a + x.endedAt! - x.startedAt, 0));
+    const restored = await sessions(l.id);
+    expect(restored.map((x) => [x.startedAt, x.endedAt])).toEqual(before.map((x) => [x.startedAt, x.endedAt]));
+  });
+
+  it('cuts a session that straddles the new start and keeps its earlier part', async () => {
+    const l = await create('Straddle', { start: true });
+    const s1 = clock.now();
+    clock.advance(60 * M);
+    await post(`/api/loops/${l.id}/stop`).expect(200); // 60m session
+    clock.advance(30 * M);
     await post(`/api/loops/${l.id}/start`).expect(200);
     clock.advance(10 * M);
 
-    const bad = await retime(l.id, endedAt - M).expect(400);
-    expect(bad.body.error.code).toBe('overlaps_session');
-    const ok = await retime(l.id, endedAt + 5 * M).expect(200);
-    expect(ok.body.loop.runningSince).toBe(endedAt + 5 * M);
-    expect(ok.body.loop.accumulatedMs).toBe(30 * M);
+    const target = s1 + 40 * M; // inside the first session
+    const r = await retime(l.id, target).expect(200);
+    expect(r.body.loop.accumulatedMs).toBe(40 * M);
+    expect(r.body.loop.runningSince).toBe(target);
+    const list = await sessions(l.id);
+    expect(list.map((x) => [x.startedAt - s1, x.endedAt == null ? null : x.endedAt - s1])).toEqual([
+      [40 * M, null],
+      [0, 40 * M],
+    ]);
+    // Total active time is unchanged by the overlap: 40m kept + running since the cut.
+    expect(r.body.loop.accumulatedMs + (clock.now() - r.body.loop.runningSince)).toBe(100 * M);
+  });
+
+  it('moving a running start later needs no merging', async () => {
+    const l = await create('Later', { start: true });
+    clock.advance(30 * M);
+    const r = await retime(l.id, clock.now() - 10 * M).expect(200);
+    expect(r.body.loop.runningSince).toBe(clock.now() - 10 * M);
+    expect(r.body.undo.label).toBe('Moved start of Later');
   });
 
   it('backdates when an open loop was opened', async () => {

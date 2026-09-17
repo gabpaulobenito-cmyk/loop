@@ -14,7 +14,7 @@ export interface InspectorActions {
   priority: (id: string) => void;
   edit: (id: string, patch: { title?: string; note?: string }) => Promise<boolean>;
   remove: (id: string) => void;
-  retime: (id: string, startedAt: number) => void;
+  retime: (id: string, startedAt: number, predictedAccumulatedMs?: number) => void;
 }
 
 interface Props {
@@ -316,9 +316,9 @@ export function Inspector({ loop, now, pending, keysEnabled, onDismiss, actions 
             sessions={sessions?.sessions ?? null}
             now={now}
             onCancel={() => setEditingStart(false)}
-            onSave={(at) => {
+            onSave={(at, kept) => {
               setEditingStart(false);
-              actions.retime(loop.id, at);
+              actions.retime(loop.id, at, kept);
             }}
           />
         </div>

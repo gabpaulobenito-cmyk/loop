@@ -45,6 +45,8 @@ interface Snapshot {
   createdAt?: number;
   /** Original start of a session moved by a retime action. */
   sessionStart?: { id: string; startedAt: number };
+  /** Earlier sessions a backdated running session absorbed (restored on undo). */
+  absorbed?: { deleted: { id: string; startedAt: number; endedAt: number }[]; truncated: { id: string; endedAt: number }[] };
 }
 
 const ms = (d: Date | null) => (d ? d.getTime() : null);
@@ -140,6 +142,7 @@ interface Action {
   sessionStartedId?: string;
   sessionEndedId?: string;
   sessionStart?: { id: string; startedAt: number };
+  absorbed?: Snapshot['absorbed'];
 }
 
 async function lockLoop(c: Client, id: string, includeDeleted = false): Promise<LoopRow> {
@@ -150,6 +153,7 @@ async function lockLoop(c: Client, id: string, includeDeleted = false): Promise<
 
 async function recordAction(c: Client, loopId: string, before: Snapshot | null, action: Action, now: number) {
   if (before && action.sessionStart) before = { ...before, sessionStart: action.sessionStart };
+  if (before && action.absorbed) before = { ...before, absorbed: action.absorbed };
   const { rows } = await c.query<{ version: number }>('SELECT version FROM loops WHERE id = $1', [loopId]);
   await c.query(
     `INSERT INTO action_history (loop_id, kind, label, before, session_started_id, session_ended_id, loop_version_after, created_at)
@@ -336,24 +340,47 @@ export function retimeLoop(pool: Pool, id: string, startAt: number, now: number)
     if (row.state === 'running') {
       const since = row.running_since!.getTime();
       if (target === since) return null;
-      const { rows: prev } = await c.query<{ ended: Date | null }>(
-        `SELECT max(ended_at) AS ended FROM loop_sessions WHERE loop_id = $1 AND ended_at IS NOT NULL`,
-        [id],
+      // Backdating past earlier sessions absorbs them: sessions entirely after the new
+      // start merge into the running one, and one straddling it is cut at that point.
+      // Total time never double-counts, and undo restores them exactly.
+      const { rows: overlapping } = await c.query<{ id: string; started_at: Date; ended_at: Date }>(
+        `SELECT id, started_at, ended_at FROM loop_sessions
+         WHERE loop_id = $1 AND ended_at IS NOT NULL AND ended_at > $2
+         ORDER BY started_at`,
+        [id, new Date(target)],
       );
-      const prevEnd = prev[0]?.ended?.getTime();
-      if (prevEnd != null && target < prevEnd) {
-        throw new HttpError(400, 'overlaps_session', `Can’t start before the previous session ended (${fmtWhen(prevEnd)})`);
+      const absorbed: NonNullable<Snapshot['absorbed']> = { deleted: [], truncated: [] };
+      for (const o of overlapping) {
+        if (o.started_at.getTime() >= target) {
+          absorbed.deleted.push({ id: o.id, startedAt: o.started_at.getTime(), endedAt: o.ended_at.getTime() });
+          await c.query('DELETE FROM loop_sessions WHERE id = $1', [o.id]);
+        } else {
+          absorbed.truncated.push({ id: o.id, endedAt: o.ended_at.getTime() });
+          await c.query('UPDATE loop_sessions SET ended_at = $2 WHERE id = $1', [o.id, new Date(target)]);
+        }
       }
       const { rows: open } = await c.query<{ id: string }>(
         `UPDATE loop_sessions SET started_at = $2 WHERE loop_id = $1 AND ended_at IS NULL RETURNING id`,
         [id, new Date(target)],
       );
       if (!open[0]) throw new HttpError(500, 'session_missing', 'Running session record is missing');
-      await c.query(
-        `UPDATE loops SET running_since = $2, created_at = LEAST(created_at, $2), version = version + 1, updated_at = $3 WHERE id = $1`,
-        [id, new Date(target), new Date(now)],
+      const { rows: sum } = await c.query<{ total: number }>(
+        `SELECT COALESCE(SUM(ROUND(EXTRACT(EPOCH FROM (ended_at - started_at)) * 1000)), 0)::bigint AS total
+         FROM loop_sessions WHERE loop_id = $1 AND ended_at IS NOT NULL`,
+        [id],
       );
-      return { kind: 'retime', label: `Moved start of ${quote(row.title)}`, sessionStart: { id: open[0].id, startedAt: since } };
+      await c.query(
+        `UPDATE loops SET running_since = $2, created_at = LEAST(created_at, $2), accumulated_ms = $4,
+           version = version + 1, updated_at = $3 WHERE id = $1`,
+        [id, new Date(target), new Date(now), Number(sum[0].total)],
+      );
+      const merged = absorbed.deleted.length + absorbed.truncated.length;
+      return {
+        kind: 'retime',
+        label: `Moved start of ${quote(row.title)}${merged ? ` (merged ${merged} session${merged === 1 ? '' : 's'})` : ''}`,
+        sessionStart: { id: open[0].id, startedAt: since },
+        absorbed: merged ? absorbed : undefined,
+      };
     }
 
     if (target === createdAt) return null;
@@ -435,6 +462,19 @@ export async function undoLast(pool: Pool, now: number): Promise<MutationResult>
     const b = h.before;
     if (b.sessionStart) {
       await c.query('UPDATE loop_sessions SET started_at = $2 WHERE id = $1', [b.sessionStart.id, new Date(b.sessionStart.startedAt)]);
+    }
+    if (b.absorbed) {
+      for (const d of b.absorbed.deleted) {
+        await c.query('INSERT INTO loop_sessions (id, loop_id, started_at, ended_at) VALUES ($1, $2, $3, $4)', [
+          d.id,
+          h.loop_id,
+          new Date(d.startedAt),
+          new Date(d.endedAt),
+        ]);
+      }
+      for (const t of b.absorbed.truncated) {
+        await c.query('UPDATE loop_sessions SET ended_at = $2 WHERE id = $1', [t.id, new Date(t.endedAt)]);
+      }
     }
     if (b.createdAt != null) {
       await c.query('UPDATE loops SET created_at = $2 WHERE id = $1', [h.loop_id, new Date(b.createdAt)]);

@@ -1351,7 +1351,17 @@ ul {
 :root[data-theme='light'] .start-edit__time input { color-scheme: light; }
 .start-edit__time input:focus { border-color: var(--lime-ink); }
 .start-edit__preview { flex: 1 1 160px; text-align: right; font: 500 10.5px/1.4 var(--f-mono); letter-spacing: 0.06em; color: var(--muted); }
-.start-edit__preview.is-error { color: var(--text-hi); }
+.start-edit__notice {
+  margin: 0 0 14px;
+  padding: 9px 10px;
+  border: 1px solid var(--line-ctl);
+  border-left: 2px solid var(--lime-ink);
+  background: var(--section);
+  font: 500 10.5px/1.45 var(--f-mono);
+  letter-spacing: 0.03em;
+  color: var(--text-2);
+}
+.start-edit__notice.is-error { border-left-color: var(--text-hi); color: var(--text-hi); }
 .start-edit__foot { display: flex; gap: 1px; margin: 0 -16px; background: var(--line); border-top: 1px solid var(--line); }
 .start-edit__cancel,
 .start-edit__save { height: 40px; padding: 0 16px; font: 500 10.5px/1 var(--f-mono); letter-spacing: 0.1em; white-space: nowrap; }

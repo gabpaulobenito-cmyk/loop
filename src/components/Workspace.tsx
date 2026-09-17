@@ -112,7 +112,7 @@ export function Workspace() {
       close: (id) => void store.close(id),
       priority: (id) => void store.togglePriority(id),
       edit: (id, patch) => store.edit(id, patch),
-      retime: (id, at) => void store.retime(id, at),
+      retime: (id, at, kept) => void store.retime(id, at, kept),
       remove: (id) => {
         setOverlay(false);
         void store.remove(id);

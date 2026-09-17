@@ -305,6 +305,42 @@ test.describe('edit start time', () => {
     });
   }
 
+  test('backdating a running loop past earlier sessions merges them instead of blocking', async ({ page }) => {
+    await page.setViewportSize({ width: 1024, height: 900 });
+    await login(page);
+    await resetData(page.request);
+    const title = `Merge ${Date.now()}`;
+    const id = crypto.randomUUID();
+    await page.request.post('/api/loops', { headers: H, data: { id, title, start: true } });
+    await page.request.post(`/api/loops/${id}/stop`, { headers: H });
+    await page.request.post(`/api/loops/${id}/start`, { headers: H });
+    await page.request.post(`/api/loops/${id}/stop`, { headers: H });
+    await page.request.post(`/api/loops/${id}/start`, { headers: H });
+    await page.reload();
+
+    const row = page.locator('[data-row]', { hasText: title });
+    await row.click({ position: { x: 4, y: 4 } });
+    const dialog = page.getByRole('dialog', { name: 'Loop details' });
+    await expect(dialog.getByRole('list', { name: 'Session history' }).locator('li')).toHaveCount(3);
+    await dialog.getByRole('button', { name: 'EDIT START' }).click();
+    const editor = dialog.getByRole('group', { name: 'Edit when this session started' });
+    await editor.getByRole('button', { name: 'YESTERDAY' }).click();
+    await expect(editor.getByRole('status')).toHaveText('↳ Merges 2 earlier sessions into this one');
+    const save = editor.getByRole('button', { name: /SAVE START/ });
+    await expect(save).toBeEnabled();
+    await save.click();
+
+    await expect(dialog.getByRole('list', { name: 'Session history' }).locator('li')).toHaveCount(1);
+    await expect
+      .poll(async () => {
+        const st = await (await page.request.get('/api/state', { headers: H })).json();
+        const l = st.loops.find((x: { id: string }) => x.id === id);
+        return [l.sessionCount, Math.round((st.serverNow - l.runningSince) / 3_600_000)];
+      })
+      .toEqual([1, 24]);
+    await expect(row.locator('.row__timer')).toHaveText(/^1D 00:0/);
+  });
+
   test('pick a date and time for when an open loop was opened', async ({ page }) => {
     await page.setViewportSize({ width: 1024, height: 900 });
     await login(page);
