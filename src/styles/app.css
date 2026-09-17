@@ -1198,6 +1198,9 @@ ul {
   .insp-stat:nth-child(-n + 2) { border-bottom: 1px solid var(--line-row); }
   .sess { gap: 8px; }
   .sess__range { min-width: 0; }
+  .insp-foot__btn { padding: 0 10px; }
+}
+@container inspector (max-width: 380px) {
   .insp-foot { flex-wrap: wrap; }
   .insp-foot__btn { flex: 1; padding: 0 8px; }
   .insp-foot__btn--main { flex-basis: 100%; }
