@@ -127,6 +127,59 @@ test.describe('core loop lifecycle (desktop)', () => {
   });
 });
 
+test.describe('new loop pop-up', () => {
+  for (const width of [1280, 393, 220]) {
+    test(`+ opens a centered pop-up; Enter starts the loop at ${width}px`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 800 });
+      await login(page);
+      await resetData(page.request);
+      await page.reload();
+
+      await page.getByRole('button', { name: /^(NEW LOOP|New loop|\+ ?NEW)/i }).first().click();
+      const dialog = page.getByRole('dialog', { name: 'NEW LOOP' });
+      await expect(dialog).toBeVisible();
+      const box = (await dialog.boundingBox())!;
+      expect(box.x).toBeGreaterThanOrEqual(0);
+      expect(box.x + box.width).toBeLessThanOrEqual(width);
+
+      const title = dialog.getByRole('textbox', { name: 'WHAT ARE YOU STARTING?' });
+      await expect(title).toBeFocused();
+      const name = `Popup ${width} ${Date.now()}`;
+      await title.fill(name);
+      const note = dialog.locator('#capture-note');
+      await note.fill('context from the pop-up');
+      await expect(dialog.getByRole('button', { name: /START/ }).last()).toBeEnabled();
+      await note.press('Enter');
+
+      await expect(dialog).toHaveCount(0);
+      const row = page.locator('[data-row]', { hasText: name });
+      await expect(row).toHaveAttribute('data-state', 'running');
+      await expect(row).toContainText('context from the pop-up');
+    });
+  }
+
+  test('add without starting and cancel', async ({ page }) => {
+    await page.setViewportSize({ width: 1024, height: 800 });
+    await login(page);
+    await resetData(page.request);
+    await page.reload();
+
+    await page.keyboard.press('n');
+    const dialog = page.getByRole('dialog', { name: 'NEW LOOP' });
+    await expect(dialog.getByRole('button', { name: /START/ }).last()).toBeDisabled();
+    const name = `Open only ${Date.now()}`;
+    await dialog.locator('#capture-title').fill(name);
+    await dialog.getByRole('button', { name: /ADD WITHOUT STARTING/ }).click();
+    await expect(page.locator('[data-row]', { hasText: name })).toHaveAttribute('data-state', 'open');
+
+    await page.getByRole('button', { name: /NEW LOOP/ }).click();
+    await dialog.locator('#capture-title').fill('should not be created');
+    await page.keyboard.press('Escape');
+    await expect(dialog).toHaveCount(0);
+    await expect(page.locator('[data-row]', { hasText: 'should not be created' })).toHaveCount(0);
+  });
+});
+
 test.describe('⋮ opens the detail drawer', () => {
   for (const width of [1024, 393, 220]) {
     test(`rename, note, delete and undo from the drawer at ${width}px`, async ({ page }) => {

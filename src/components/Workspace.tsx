@@ -132,13 +132,9 @@ export function Workspace() {
 
   const openNew = useCallback(() => {
     setMenuOpen(false);
-    if (mode === 'desk' || mode === 'wide') {
-      setOverlay(false);
-      captureRef.current?.focus();
-    } else {
-      setCaptureOpen(true);
-    }
-  }, [mode]);
+    setOverlay(false);
+    setCaptureOpen(true);
+  }, []);
 
   const openSearch = useCallback(() => {
     setMenuOpen(false);

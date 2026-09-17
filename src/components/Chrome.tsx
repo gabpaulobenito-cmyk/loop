@@ -99,7 +99,7 @@ export function Header({ mode, runCount, openCount, anyRunning, search, onNew, m
           <span className="sr-only">{runCount} running, {openCount} open, total </span>
           {pad2(total)}
         </span>
-        <button type="button" className="btn-new hit" title={`NEW LOOP — ${MOD}N`} onClick={onNew}>
+        <button type="button" className="btn-new hit" title={`NEW LOOP — ${MOD}N`} aria-label="New loop" onClick={onNew}>
           <span className="btn-new__plus" aria-hidden="true">+</span>
           <span className="btn-new__label">NEW</span>
         </button>
@@ -197,17 +197,30 @@ export function CaptureBar({ inputRef, onCreate }: CaptureBarProps) {
   );
 }
 
-// ── Quick capture dialog (rail / mobile) ─────────────────────────────────────
+// ── New loop pop-up ──────────────────────────────────────────────────────────
 
 interface CaptureDialogProps {
   onClose: () => void;
   onCreate: (title: string, note: string, start: boolean) => Promise<unknown>;
 }
 
+/** Grow a textarea to fit its content. */
+function autosize(el: HTMLTextAreaElement | null) {
+  if (!el) return;
+  el.style.height = 'auto';
+  el.style.height = `${el.scrollHeight}px`;
+}
+
+/**
+ * Centered pop-up for starting a loop: large title, optional note, and a start
+ * button. Enter creates the loop and starts its timer; ⇧⏎ adds it without starting.
+ */
 export function CaptureDialog({ onClose, onCreate }: CaptureDialogProps) {
   const [title, setTitle] = useState('');
   const [note, setNote] = useState('');
-  const titleRef = useRef<HTMLInputElement>(null);
+  const titleRef = useRef<HTMLTextAreaElement>(null);
+  const noteRef = useRef<HTMLTextAreaElement>(null);
+  const submitted = useRef(false);
   const has = title.trim().length > 0;
 
   useEffect(() => {
@@ -216,19 +229,26 @@ export function CaptureDialog({ onClose, onCreate }: CaptureDialogProps) {
     return () => prev?.focus?.();
   }, []);
 
+  useLayoutEffect(() => autosize(titleRef.current), [title]);
+  useLayoutEffect(() => autosize(noteRef.current), [note]);
+
   const submit = (start: boolean) => {
     if (!has) {
       titleRef.current?.focus();
       return;
     }
+    if (submitted.current) return;
+    submitted.current = true;
     void onCreate(title, note, start);
     onClose();
   };
-  const onKey = (e: ReactKeyboardEvent) => {
+
+  const onKey = (e: ReactKeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
       e.preventDefault();
-      submit(e.shiftKey);
+      submit(!e.shiftKey);
     } else if (e.key === 'Escape') {
+      e.preventDefault();
       e.stopPropagation();
       onClose();
     }
@@ -236,44 +256,54 @@ export function CaptureDialog({ onClose, onCreate }: CaptureDialogProps) {
 
   return (
     <>
-      <div className="scrim" onClick={onClose} />
-      <div className="capture" role="dialog" aria-modal="true" aria-label="New loop">
-        <div className="capture__row">
-          <span className="capture__prompt" aria-hidden="true">&gt;</span>
-          <input
-            ref={titleRef}
-            type="text"
-            aria-label="Loop title"
-            placeholder="What are you starting?"
-            autoComplete="off"
-            enterKeyHint="done"
-            maxLength={140}
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            onKeyDown={onKey}
-          />
-          <button type="button" className="capture__esc" onClick={onClose} aria-label="Cancel">ESC</button>
-        </div>
-        <div className="capture__noterow">
-          <span className="capture__noteprompt" aria-hidden="true">·</span>
-          <input
-            type="text"
-            aria-label="Context note (optional)"
-            placeholder="Context note (optional)"
-            autoComplete="off"
-            enterKeyHint="done"
-            maxLength={280}
-            value={note}
-            onChange={(e) => setNote(e.target.value)}
-            onKeyDown={onKey}
-          />
-        </div>
-        <div className="capture__acts">
-          <button type="button" className="capture__act" disabled={!has} onClick={() => submit(false)}>
-            CREATE OPEN<kbd>⏎</kbd>
+      <div className="scrim scrim--capture" onClick={onClose} />
+      <div className="capture" role="dialog" aria-modal="true" aria-labelledby="capture-heading">
+        <div className="capture__head">
+          <span className="marker marker--running" aria-hidden="true" />
+          <h2 id="capture-heading" className="capture__heading">NEW LOOP</h2>
+          <span className="hdr__spacer" />
+          <button type="button" className="capture__esc" onClick={onClose} aria-label="Cancel">
+            ESC ✕
           </button>
-          <button type="button" className="capture__act capture__act--start" disabled={!has} onClick={() => submit(true)}>
-            CREATE + START<kbd>⇧⏎</kbd>
+        </div>
+
+        <label className="capture__label" htmlFor="capture-title">WHAT ARE YOU STARTING?</label>
+        <textarea
+          id="capture-title"
+          ref={titleRef}
+          className="capture__title"
+          rows={1}
+          maxLength={140}
+          placeholder="Title"
+          autoComplete="off"
+          enterKeyHint="go"
+          value={title}
+          onChange={(e) => setTitle(e.target.value.replace(/\n/g, ' '))}
+          onKeyDown={onKey}
+        />
+
+        <label className="capture__label" htmlFor="capture-note">NOTE</label>
+        <textarea
+          id="capture-note"
+          ref={noteRef}
+          className="capture__note"
+          rows={2}
+          maxLength={280}
+          placeholder="Context — where you left off, what’s next (optional)"
+          autoComplete="off"
+          enterKeyHint="go"
+          value={note}
+          onChange={(e) => setNote(e.target.value.replace(/\n/g, ' '))}
+          onKeyDown={onKey}
+        />
+
+        <div className="capture__foot">
+          <button type="button" className="capture__secondary" disabled={!has} onClick={() => submit(false)}>
+            ADD WITHOUT STARTING <kbd>⇧⏎</kbd>
+          </button>
+          <button type="button" className="capture__start" disabled={!has} onClick={() => submit(true)}>
+            <span className="g-play" aria-hidden="true" />
+            START <kbd>⏎</kbd>
           </button>
         </div>
       </div>
