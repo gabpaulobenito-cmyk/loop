@@ -1,131 +1,91 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test } from '@playwright/test';
 
-const TAG = `SMOKE-${Date.now().toString(36).toUpperCase()}`;
-const H = { 'x-loop-client': '1' };
+/**
+ * Post-deploy smoke test against the LIVE workspace.
+ * It is strictly read-only: it never creates, edits, starts/stops or undoes
+ * anything, so it can't interfere with real loops or the undo history.
+ * Mutations are covered by the local e2e suite (`npm run test:e2e`).
+ */
+
 const WIDTHS = [180, 220, 260, 375, 393, 720, 1440];
-
-const secs = (t: string) => t.trim().split(':').map(Number).reduce((a, n) => a * 60 + n, 0);
+const secsOf = (t: string) =>
+  t
+    .replace(/\s/g, '')
+    .split('·')
+    .reduce((total, part) => {
+      if (part.endsWith('MO')) return total + Number(part.slice(0, -2)) * 30 * 86400;
+      if (part.endsWith('D')) return total + Number(part.slice(0, -1)) * 86400;
+      return total + part.split(':').map(Number).reduce((a, n) => a * 60 + n, 0);
+    }, 0);
 
 test.skip(!process.env.SMOKE_URL, 'SMOKE_URL is required');
 
-async function login(page: Page) {
-  await page.goto('/');
-  await expect(page.getByRole('main', { name: 'Loops' })).toBeVisible();
-}
-
-test('production lifecycle, persistence, timers and layouts', async ({ page }) => {
+test('live workspace loads, timers tick in sync, layouts hold (read-only)', async ({ page, request }) => {
   const consoleErrors: string[] = [];
   page.on('console', (m) => m.type() === 'error' && consoleErrors.push(m.text()));
   page.on('pageerror', (e) => consoleErrors.push(e.message));
 
+  // Any write from this test would be a bug: fail loudly if one is attempted.
+  const writes: string[] = [];
+  page.on('request', (r) => {
+    if (r.url().includes('/api/') && r.method() !== 'GET') writes.push(`${r.method()} ${r.url()}`);
+  });
+
+  expect((await request.get('/api/health')).status()).toBe(200);
+
   await page.setViewportSize({ width: 1024, height: 860 });
-  await login(page);
+  await page.goto('/');
+  await expect(page.getByRole('main', { name: 'Loops' })).toBeVisible();
 
-  try {
-    const title = `${TAG} Alpha`;
-    const capture = page.getByRole('textbox', { name: /New loop title/ });
-    await capture.fill(`${title} // smoke note`);
-    await capture.press('Shift+Enter');
+  const state = await (await request.get('/api/state')).json();
+  const running = state.loops.filter((l: { state: string }) => l.state === 'running');
+  console.log(`loops: ${state.loops.length}, running: ${running.length}`);
 
-    // Create + start
-    const row = page.getByRole('list', { name: 'Running loops' }).locator('[data-row]', { hasText: title });
-    const timer = row.locator('.row__timer');
-    await expect(row).toBeVisible();
-    try {
-      await expect.poll(async () => secs(await timer.innerText()), { timeout: 8000 }).toBeGreaterThanOrEqual(3);
-    } catch (err) {
-      const st = await (await page.request.get('/api/state', { headers: H })).json();
-      const l = st.loops.find((x: { title: string }) => x.title === title);
-      const client = await page.evaluate(() => ({ now: Date.now(), timer: document.querySelector('[data-row] .row__timer')?.textContent }));
-      console.log('DIAG', JSON.stringify({ serverNow: st.serverNow, loop: l, client, ui: await timer.innerText() }));
-      throw err;
-    }
+  if (running.length) {
+    const loop = running[0];
+    const timer = page.locator(`[data-row="${loop.id}"] .row__timer`);
+    await expect(timer).toBeVisible();
+    const first = secsOf(await timer.innerText());
+    await expect.poll(async () => secsOf(await timer.innerText()), { timeout: 5000 }).toBeGreaterThanOrEqual(first + 2);
 
-    // Refresh: timer continues and agrees with server timestamps.
-    const before = secs(await timer.innerText());
-    await page.reload();
-    await expect(row).toBeVisible();
-    expect(secs(await timer.innerText())).toBeGreaterThanOrEqual(before);
-    const state = await (await page.request.get('/api/state', { headers: H })).json();
-    const loop = state.loops.find((l: { title: string }) => l.title === title);
-    const serverElapsed = Math.floor((state.serverNow - loop.runningSince + loop.accumulatedMs) / 1000);
-    expect(Math.abs(secs(await timer.innerText()) - serverElapsed)).toBeLessThanOrEqual(2);
-    console.log(`timer after refresh: ui=${await timer.innerText()} server=${serverElapsed}s`);
+    const fresh = await (await request.get('/api/state')).json();
+    const l = fresh.loops.find((x: { id: string }) => x.id === loop.id);
+    const serverElapsed = Math.floor((fresh.serverNow - l.runningSince + l.accumulatedMs) / 1000);
+    const ui = secsOf(await timer.innerText());
+    console.log(`timer ui=${await timer.innerText()} server=${serverElapsed}s`);
+    expect(Math.abs(ui - serverElapsed)).toBeLessThanOrEqual(2);
 
-    // Stop
-    await row.getByRole('button', { name: `Stop ${title}` }).click();
-    const openRow = page.getByRole('list', { name: 'Open loops' }).locator('[data-row]', { hasText: title });
-    await expect(openRow).toBeVisible();
-
-    // Resume keeps accumulated time (pause past the double-tap guard)
-    await page.waitForTimeout(400);
-    await openRow.getByRole('button', { name: `Resume ${title}` }).click();
-    await expect(row).toBeVisible();
-    expect(secs(await timer.innerText())).toBeGreaterThanOrEqual(before);
-
-    // Row opens details (without toggling); priority from the pop-up
-    await row.click();
-    const inspector = page.getByRole('dialog', { name: 'Loop details' });
-    await expect(inspector).toBeVisible();
-    await expect(row).toHaveAttribute('data-state', 'running');
-    await inspector.getByRole('button', { name: 'PRIORITY', exact: true }).click();
-    await expect(row.locator('[data-marker="priority"]')).toBeVisible();
-
-    // Close the running loop from the pop-up
-    await expect(inspector.getByRole('list', { name: 'Session history' }).locator('li')).toHaveCount(2);
-    await inspector.getByRole('button', { name: /CLOSE LOOP/ }).click();
-    await expect(inspector.getByRole('button', { name: /REOPEN/ }).first()).toBeVisible();
-    await expect(inspector.getByText('→ NOW')).toHaveCount(0);
+    // Details open and close without changing anything.
+    await page.locator(`[data-row="${loop.id}"] .row__title`).click();
+    const dialog = page.getByRole('dialog', { name: 'Loop details' });
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByRole('list', { name: 'Session history' })).toBeVisible();
     await page.keyboard.press('Escape');
-
-    // Reopen from archive
-    const archive = page.getByRole('button', { name: /CLOSED/ });
-    if ((await archive.getAttribute('aria-expanded')) !== 'true') await archive.click();
-    await page.getByRole('list', { name: 'Closed loops' }).getByRole('button', { name: `Reopen ${title}` }).click();
-    await expect(openRow).toBeVisible();
-
-    // Persistence
-    await page.reload();
-    await expect(openRow).toBeVisible();
-    await expect(openRow.locator('[data-marker="priority"]')).toBeVisible();
-
-    // A second running loop for the layout checks.
-    await capture.fill(`${TAG} Beta`);
-    await capture.press('Shift+Enter');
-    await expect(page.locator('[data-row]', { hasText: `${TAG} Beta` }).getByRole('button', { name: `Stop ${TAG} Beta` })).toBeVisible();
-
-    for (const width of WIDTHS) {
-      await page.setViewportSize({ width, height: 860 });
-      await page.reload();
-      await expect(page.locator('[data-row]').first()).toBeVisible();
-      const layout = await page.evaluate(() => ({
-        mode: document.querySelector('.app')?.getAttribute('data-mode'),
-        overflow: document.documentElement.scrollWidth - window.innerWidth,
-        listOverflow: (() => {
-          const l = document.querySelector('.list') as HTMLElement;
-          return l.scrollWidth - l.clientWidth;
-        })(),
-        badMarkers: Array.from(document.querySelectorAll<HTMLElement>('.marker:not(.marker--closed)'))
-          .map((m) => m.getBoundingClientRect())
-          .filter((r) => r.width !== 6 || r.height !== 6).length,
-      }));
-      console.log(`${width}px → ${JSON.stringify(layout)}`);
-      expect(layout.overflow).toBeLessThanOrEqual(0);
-      expect(layout.listOverflow).toBeLessThanOrEqual(0);
-      expect(layout.badMarkers).toBe(0);
-      await expect(page.locator('[data-row]', { hasText: `${TAG} Beta` }).getByRole('button', { name: `Stop ${TAG} Beta` })).toBeVisible();
-      await page.screenshot({ path: `test-results/smoke-${width}.png` });
-    }
-
-    expect(consoleErrors).toEqual([]);
-  } finally {
-    // Clean up: undo only this run's actions, then sign out.
-    for (let i = 0; i < 40; i++) {
-      const s = await (await page.request.get('/api/state', { headers: H })).json();
-      if (!s.undo || !String(s.undo.label).includes(TAG)) break;
-      await page.request.post('/api/undo', { headers: H });
-    }
-    const s = await (await page.request.get('/api/state', { headers: H })).json();
-    console.log(`leftover smoke loops: ${s.loops.filter((l: { title: string }) => l.title.includes(TAG)).length}`);
+    await expect(dialog).toHaveCount(0);
   }
+
+  for (const width of WIDTHS) {
+    await page.setViewportSize({ width, height: 860 });
+    await page.reload();
+    await expect(page.getByRole('main', { name: 'Loops' })).toBeVisible();
+    const layout = await page.evaluate(() => ({
+      mode: document.querySelector('.app')?.getAttribute('data-mode'),
+      overflow: document.documentElement.scrollWidth - window.innerWidth,
+      listOverflow: (() => {
+        const l = document.querySelector('.list') as HTMLElement;
+        return l.scrollWidth - l.clientWidth;
+      })(),
+      badMarkers: Array.from(document.querySelectorAll<HTMLElement>('.marker:not(.marker--closed)'))
+        .map((m) => m.getBoundingClientRect())
+        .filter((r) => r.width !== 6 || r.height !== 6).length,
+    }));
+    console.log(`${width}px → ${JSON.stringify(layout)}`);
+    expect(layout.overflow).toBeLessThanOrEqual(0);
+    expect(layout.listOverflow).toBeLessThanOrEqual(0);
+    expect(layout.badMarkers).toBe(0);
+    await page.screenshot({ path: `test-results/smoke-${width}.png` });
+  }
+
+  expect(writes).toEqual([]);
+  expect(consoleErrors).toEqual([]);
 });

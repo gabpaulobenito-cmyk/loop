@@ -3,8 +3,7 @@ import { defineConfig, devices } from '@playwright/test';
 /**
  * Post-deploy smoke test against a live deployment.
  *   SMOKE_URL=https://… npm run test:smoke
- * It creates uniquely tagged loops, verifies the full lifecycle and layouts,
- * then undoes its own actions.
+ * Strictly read-only against the live workspace (see tests/smoke).
  */
 export default defineConfig({
   testDir: 'tests/smoke',

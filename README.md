@@ -184,7 +184,7 @@ Data lives in the Railway PostgreSQL volume and survives deploys and restarts. T
 
 ### Post-deploy smoke test
 
-`tests/smoke` runs the full lifecycle against a live deployment: create + start, refresh with a timer check against server timestamps, stop, resume, priority, inspector, close, reopen, persistence, and layouts at 180 / 220 / 260 / 375 / 393 / 720 / 1440 px. It fails on any browser console error, then undoes its own tagged actions.
+`tests/smoke` checks a live deployment **read-only**. It never creates, edits or undoes anything, so it can't disturb real loops or the undo history, and it fails if it ever tries to write. It checks that the workspace loads, running timers tick and agree with server timestamps, details open, layouts hold at 180 / 220 / 260 / 375 / 393 / 720 / 1440 px, and there are no console errors. Writes are covered by `npm run test:e2e` against the local test database.
 
 ```bash
 SMOKE_URL=https://<your-domain> npm run test:smoke
