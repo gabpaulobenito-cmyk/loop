@@ -9,26 +9,27 @@
   --f-mono: 'Geist Mono Variable', 'Geist Mono', ui-monospace, 'SF Mono', Menlo, monospace;
   --f-cond: 'Saira Condensed', 'Arial Narrow', system-ui, sans-serif;
 
-  --bg: #212124;
-  --bar: #2e2e30;
-  --section: #282829;
-  --hover: #313134;
-  --field: #313134;
-  --line: #3a3a3d;
-  --line-row: #313134;
-  --line-ctl: #45454a;
-  --line-ctl-hover: #5a5a60;
-  --scrim: rgba(18, 18, 20, 0.6);
+  /* Neutral near-blacks, matched to the Claude desktop dark theme. */
+  --bg: #181818;
+  --bar: #121212;
+  --section: #141414;
+  --hover: #212121;
+  --field: #1e1e1e;
+  --line: #2a2a2a;
+  --line-row: #222222;
+  --line-ctl: #333333;
+  --line-ctl-hover: #4a4a4a;
+  --scrim: rgba(0, 0, 0, 0.55);
 
   --text-hi: #f0ede8;
   --text: #ece9e4;
-  --text-2: #c2bfc7;
-  --note: #b5b2bb;
-  --note-strong: #c2bfc7;
-  --muted: #a8a8b0;
-  --muted-2: #a3a3ab;
-  --muted-3: #9a9aa3;
-  --strike: #2e2e36;
+  --text-2: #c4c4c4;
+  --note: #b3b3b3;
+  --note-strong: #c4c4c4;
+  --muted: #a8a8a8;
+  --muted-2: #a0a0a0;
+  --muted-3: #999999;
+  --strike: #2e2e2e;
 
   --lime: #ccff00;
   --lime-ink: #ccff00;
@@ -44,10 +45,10 @@
   --btn-new-hint: #b3c274;
 
   --prio: #ff3b47;
-  --open-ring: #474751;
+  --open-ring: #4a4a4a;
 
-  --age0-name: #9a9aa3; --age0-age: #a0a0a8; --age0-w: 400;
-  --age1-name: #b2b2b9; --age1-age: #b2b2b9; --age1-w: 400;
+  --age0-name: #999999; --age0-age: #a0a0a0; --age0-w: 400;
+  --age1-name: #b3b3b3; --age1-age: #b3b3b3; --age1-w: 400;
   --age2-name: #c9c5be; --age2-age: #c9c5be; --age2-w: 500;
   --age3-name: #e4e1db; --age3-age: #d8d4cd; --age3-w: 600;
   --age4-name: #f0ede8; --age4-age: #f0ede8; --age4-w: 600;
@@ -185,7 +186,7 @@ ul {
 .num { font-variant-numeric: tabular-nums; }
 
 ::-webkit-scrollbar { width: 6px; height: 6px; }
-::-webkit-scrollbar-thumb { background: #26262b; border-radius: 3px; }
+::-webkit-scrollbar-thumb { background: #2a2a2a; border-radius: 3px; }
 :root[data-theme='light'] ::-webkit-scrollbar-thumb { background: #d8d6cf; }
 ::-webkit-scrollbar-track { background: transparent; }
 
@@ -942,7 +943,7 @@ ul {
   border-radius: 7px;
   overflow: hidden;
 }
-:root[data-theme='dark'] .capture { border-color: #33362a; }
+:root[data-theme='dark'] .capture { border-color: #333333; }
 .capture__row {
   display: flex;
   align-items: center;
@@ -1057,7 +1058,7 @@ ul {
 .inspector__scroll { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
 .insp-pane {
   flex: none;
-  width: clamp(380px, 32vw, 520px);
+  width: clamp(340px, 26vw, 400px);
   border-left: 1px solid var(--line);
   display: flex;
   min-height: 0;
@@ -1069,15 +1070,15 @@ ul {
   top: 0;
   right: 0;
   bottom: 0;
-  width: min(520px, calc(100vw - 64px));
-  border-left: 1px solid var(--line-ctl);
+  width: min(380px, calc(100vw - 64px));
+  border-left: 1px solid var(--line);
   display: flex;
   padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px) env(safe-area-inset-bottom, 0px) 0;
   background: var(--bg);
   animation: drawer-in 180ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 /* Phones and the rail keep a sliver of the list peeking on the left. */
-.insp-drawer--mobile { width: calc(100vw - 44px); }
+.insp-drawer--mobile { width: min(340px, calc(100vw - 56px)); }
 .insp-drawer--rail { width: calc(100vw - 22px); }
 .insp-drawer > .inspector { flex: 1; min-width: 0; }
 @keyframes drawer-in {
