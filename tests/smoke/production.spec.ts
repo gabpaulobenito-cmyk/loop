@@ -37,9 +37,21 @@ test('live workspace loads, timers tick in sync, layouts hold (read-only)', asyn
   await page.goto('/');
   await expect(page.getByRole('main', { name: 'Loops' })).toBeVisible();
 
+  type L = { id: string; state: string; owner?: string; runningSince: number; accumulatedMs: number; handedOffAt: number | null };
   const state = await (await request.get('/api/state')).json();
-  const running = state.loops.filter((l: { state: string }) => l.state === 'running');
-  console.log(`loops: ${state.loops.length}, running: ${running.length}`);
+  const filter = state.settings.ownerFilter ?? 'all';
+  const visible = (l: L) => filter === 'all' || (filter === 'mine' ? (l.owner ?? 'mine') === 'mine' : (l.owner ?? 'mine') !== 'mine');
+  const running = (state.loops as L[]).filter((l) => l.state === 'running' && (l.owner ?? 'mine') === 'mine' && visible(l));
+  const out = (state.loops as L[]).filter((l) => l.state !== 'closed' && (l.owner ?? 'mine') !== 'mine' && visible(l));
+  console.log(`loops: ${state.loops.length}, running (mine): ${running.length}, out: ${out.length}, filter: ${filter}`);
+
+  if (out.length) {
+    // OUT clocks tick from the handoff time.
+    const clock = page.locator(`[data-row="${out[0].id}"] .row__out`);
+    await expect(clock).toBeVisible();
+    const t0 = secsOf((await clock.innerText()).replace('OUT', ''));
+    await expect.poll(async () => secsOf((await clock.innerText()).replace('OUT', '')), { timeout: 5000 }).toBeGreaterThanOrEqual(t0 + 2);
+  }
 
   if (running.length) {
     const loop = running[0];
