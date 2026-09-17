@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ageLevel, fmtAge, fmtDuration, fmtHM, fmtTimer, timerParts } from '../../shared/format';
+import { ageLevel, fmtAge, fmtDuration, fmtHeaderClock, fmtHM, fmtTimer, timerParts } from '../../shared/format';
 
 const S = 1000, M = 60 * S, H = 60 * M, D = 24 * H;
 
@@ -41,5 +41,14 @@ describe('labels', () => {
 
   it('ramps age brightness at 3 / 7 / 14 / 30 days', () => {
     expect([1, 3, 7, 14, 30].map((d) => ageLevel(d * D))).toEqual([0, 1, 2, 3, 4]);
+  });
+});
+
+describe('fmtHeaderClock', () => {
+  it('formats local time as "Thu Sep 17 10:30PM"', () => {
+    expect(fmtHeaderClock(new Date(2026, 8, 17, 22, 30).getTime())).toEqual({ weekday: 'Thu', date: 'Sep 17', time: '10:30PM' });
+    expect(fmtHeaderClock(new Date(2026, 8, 18, 0, 5).getTime())).toEqual({ weekday: 'Fri', date: 'Sep 18', time: '12:05AM' });
+    expect(fmtHeaderClock(new Date(2026, 8, 18, 9, 7).getTime())).toEqual({ weekday: 'Fri', date: 'Sep 18', time: '9:07AM' });
+    expect(fmtHeaderClock(new Date(2026, 8, 18, 12, 0).getTime())).toEqual({ weekday: 'Fri', date: 'Sep 18', time: '12:00PM' });
   });
 });

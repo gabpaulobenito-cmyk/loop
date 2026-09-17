@@ -467,6 +467,29 @@ ul {
 .hdr--mobile .btn-more { font-size: 14px; }
 .hdr--mobile .hdr__total { letter-spacing: 0.08em; white-space: nowrap; }
 
+/* Live date + time: "Thu Sep 17 10:30PM" */
+.hdr__clock {
+  flex: none;
+  font: 500 10.5px/1 var(--f-mono);
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.hdr__clock-time { color: var(--text-hi); }
+.btn-search svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: square; display: block; }
+.hdr--mobile .hdr__clock { font-size: 11px; }
+/* Make room on narrower screens: counts live in the tabs/sections too. */
+@media (max-width: 459px) {
+  .hdr--mobile .hdr__total { display: none; }
+}
+@media (max-width: 339px) {
+  .hdr--mobile .hdr__clock-day { display: none; }
+}
+@media (min-width: 600px) and (max-width: 779px) {
+  .hdr:not(.hdr--mobile):not(.hdr--rail) .hdr__counts { display: none; }
+}
+
 /* ── Capture bar (desk) ─────────────────────────────────────────────────── */
 
 .capbar {

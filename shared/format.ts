@@ -92,3 +92,17 @@ export function fmtClock(ts: number): string {
   const d = new Date(ts);
   return `${p2(d.getHours())}:${p2(d.getMinutes())}`;
 }
+
+const WEEKDAY_ABBR = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const MONTH_ABBR = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+/** Header clock in local time: "Thu Sep 17 10:30PM". */
+export function fmtHeaderClock(ts: number): { weekday: string; date: string; time: string } {
+  const d = new Date(ts);
+  const h = d.getHours() % 12 || 12;
+  return {
+    weekday: WEEKDAY_ABBR[d.getDay()],
+    date: `${MONTH_ABBR[d.getMonth()]} ${d.getDate()}`,
+    time: `${h}:${p2(d.getMinutes())}${d.getHours() < 12 ? 'AM' : 'PM'}`,
+  };
+}

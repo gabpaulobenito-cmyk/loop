@@ -470,6 +470,32 @@ test.describe('ball in court', () => {
   });
 });
 
+test.describe('header', () => {
+  test('mobile search icon opens search; header shows local date and time', async ({ page }) => {
+    await page.setViewportSize({ width: 375, height: 800 });
+    await login(page);
+    await resetData(page.request);
+    await page.request.post('/api/loops', { headers: H, data: { id: crypto.randomUUID(), title: 'Findable Hikari task' } });
+    await page.request.post('/api/loops', { headers: H, data: { id: crypto.randomUUID(), title: 'Something else' } });
+    await page.reload();
+
+    const clock = page.locator('header .hdr__clock');
+    await expect(clock).toBeVisible();
+    const d = new Date();
+    const expected = `${['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][d.getDay()]} ${['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][d.getMonth()]} ${d.getDate()}`;
+    await expect(clock).toContainText(expected);
+    await expect(clock).toHaveText(/^\w{3} \w{3} \d{1,2} \d{1,2}:\d{2}(AM|PM)$/);
+
+    await page.getByRole('button', { name: 'Search loops' }).click();
+    const box = page.getByRole('searchbox', { name: 'Search loops' });
+    await expect(box).toBeFocused();
+    await box.fill('hikari');
+    await expect(page.locator('[data-row]', { hasText: 'Findable Hikari task' })).toBeVisible();
+    await expect(page.locator('[data-row]', { hasText: 'Something else' })).toHaveCount(0);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth - innerWidth)).toBeLessThanOrEqual(0);
+  });
+});
+
 test.describe('slow network', () => {
   test.use({ viewport: { width: 1024, height: 800 } });
 

@@ -1,5 +1,5 @@
 import { forwardRef, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, type RefObject } from 'react';
-import { pad2 } from '../../shared/format';
+import { fmtHeaderClock, pad2 } from '../../shared/format';
 import type { Mode } from '../hooks/useViewport';
 
 const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
@@ -66,9 +66,22 @@ interface HeaderProps {
   menuOpen: boolean;
   onMenu: () => void;
   menuButtonRef: RefObject<HTMLButtonElement | null>;
+  now: number;
+  onSearch: () => void;
 }
 
-export function Header({ mode, runCount, openCount, anyRunning, search, onNew, menuOpen, onMenu, menuButtonRef }: HeaderProps) {
+/** Live local date and time: "Thu Sep 17 10:30PM". */
+function HeaderClock({ now }: { now: number }) {
+  const { weekday, date, time } = fmtHeaderClock(now);
+  return (
+    <time className="hdr__clock" dateTime={new Date(now).toISOString()} aria-label={`${weekday} ${date} ${time}`}>
+      <span className="hdr__clock-day">{weekday} </span>
+      {date} <span className="hdr__clock-time">{time}</span>
+    </time>
+  );
+}
+
+export function Header({ mode, runCount, openCount, anyRunning, search, onNew, menuOpen, onMenu, menuButtonRef, now, onSearch }: HeaderProps) {
   const brand = (
     <span className="hdr__brand">
       <span className={`marker ${anyRunning ? 'marker--running' : 'marker--open'}`} aria-hidden="true" />
@@ -116,6 +129,13 @@ export function Header({ mode, runCount, openCount, anyRunning, search, onNew, m
           {pad2(runCount)}/{pad2(total)}
         </span>
         <span className="hdr__spacer" />
+        <HeaderClock now={now} />
+        <button type="button" className="btn-more btn-search" aria-label="Search loops" onClick={onSearch}>
+          <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+            <circle cx="6.75" cy="6.75" r="4.75" />
+            <path d="M10.4 10.4L14.5 14.5" />
+          </svg>
+        </button>
         <button type="button" className="btn-new" aria-label="New loop" onClick={onNew}>
           <span className="btn-new__plus" aria-hidden="true">+</span>
         </button>
@@ -132,6 +152,7 @@ export function Header({ mode, runCount, openCount, anyRunning, search, onNew, m
         <span className="c-open">OPEN {pad2(openCount)}</span>
       </div>
       <span className="hdr__spacer" />
+      <HeaderClock now={now} />
       {search}
       <button type="button" className="btn-new" onClick={onNew} title={`New loop (${MOD}N or N)`}>
         <span className="btn-new__plus" aria-hidden="true">+</span>

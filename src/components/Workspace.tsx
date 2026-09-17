@@ -597,6 +597,8 @@ export function Workspace() {
         menuOpen={menuOpen}
         onMenu={() => setMenuOpen((v) => !v)}
         menuButtonRef={menuBtnRef}
+        now={now}
+        onSearch={() => (searchOpen && !query ? setSearchOpen(false) : openSearch())}
       />
       {(mode === 'desk' || mode === 'wide') && <CaptureBar inputRef={captureRef} onCreate={createFromBar} />}
       {(mode === 'desk' || mode === 'wide' || mode === 'rail') && viewBar}
