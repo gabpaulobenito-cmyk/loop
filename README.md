@@ -162,22 +162,36 @@ To rotate the access key, change `LOOP_ACCESS_KEY` and redeploy. To sign out eve
 
 ## Railway deployment
 
-The repo includes `railway.json`:
+Infrastructure is defined in code in **`.railway/railway.ts`** (Railway's config-as-code SDK, `railway/iac`):
 
-- **Build:** `npm run build` (Railpack, Node 22 from `engines` / `.node-version`)
-- **Pre-deploy:** `npm run migrate`. A failed migration stops the release, and the previous deployment keeps serving.
-- **Start:** `npm start`
-- **Health check:** `GET /api/health` (checks the database connection)
-- **Restart policy:** on failure, up to 10 retries
+- **Postgres** service with a persistent volume, reachable only on the private network
+- **loop** web service built from this GitHub repo's `main` branch
+  - Build: `npm run build` (Railpack, Node 22 from `engines` / `.node-version`)
+  - Pre-deploy: `npm run migrate`. A failed migration stops the release, and the previous deployment keeps serving.
+  - Start: `npm start`
+  - Health check: `GET /api/health` (checks the database connection)
+  - Restart policy: on failure, up to 10 retries
+  - Variables: `DATABASE_URL` references `Postgres.DATABASE_URL`, `NODE_ENV=production`, and `LOOP_ACCESS_KEY` is `preserve()`d so the secret stays in Railway, never in git
 
-Setup for a new environment:
+```bash
+railway link --project <project-id> --environment production
+railway config plan      # preview changes (read-only)
+railway config apply     # apply infrastructure changes
+```
 
-1. In the Railway project, add a **PostgreSQL** service.
-2. Add a service from the GitHub repo (`main` branch). Pushes to `main` deploy automatically.
-3. Set these variables on the app service:
-   - `DATABASE_URL=${{Postgres.DATABASE_URL}}`
-   - `LOOP_ACCESS_KEY=<long random secret>`
-   - `NODE_ENV=production`
-4. Under **Settings → Networking**, generate a Railway domain. HTTPS is automatic.
+Setting up a new environment:
+
+1. `railway config apply` creates Postgres and the service.
+2. Set the secret: `railway variables --service loop --set LOOP_ACCESS_KEY=<long random secret>`.
+3. Give the Railway GitHub App access to this repository (GitHub → Settings → Applications → Railway → *Repository access*). Pushes to `main` then deploy automatically. Until then, `railway up --service loop` deploys the local checkout.
+4. Generate a domain: `railway domain --service loop`. HTTPS is automatic.
 
 Data lives in the Railway PostgreSQL volume and survives deploys and restarts. The app service itself is stateless.
+
+### Post-deploy smoke test
+
+`tests/smoke` runs the full lifecycle against a live deployment: create + start, refresh with a timer check against server timestamps, stop, resume, priority, inspector, close, reopen, persistence, and layouts at 180 / 220 / 260 / 375 / 393 / 720 / 1440 px. It fails on any browser console error, then undoes its own tagged actions and signs out.
+
+```bash
+SMOKE_URL=https://<your-domain> SMOKE_ACCESS_KEY=<key> npm run test:smoke
+```

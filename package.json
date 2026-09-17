@@ -2,7 +2,7 @@
   "name": "loop",
   "version": "1.0.0",
   "private": true,
-  "description": "LOOP \u2014 a personal open-loops tracker. What have I started but not closed?",
+  "description": "LOOP — a personal open-loops tracker. What have I started but not closed?",
   "type": "module",
   "engines": {
     "node": ">=22"
@@ -21,7 +21,8 @@
     "test": "vitest run",
     "test:unit": "vitest run tests/unit",
     "test:integration": "vitest run tests/integration",
-    "test:e2e": "npm run build && playwright test"
+    "test:e2e": "npm run build && playwright test",
+    "test:smoke": "playwright test -c playwright.smoke.config.ts"
   },
   "dependencies": {
     "@fontsource-variable/geist": "^5.3.0",
@@ -47,6 +48,7 @@
     "@vitejs/plugin-react": "^6.1.1",
     "concurrently": "^9.2.0",
     "esbuild": "^0.28.2",
+    "railway": "^3.11.0",
     "supertest": "^7.2.2",
     "tsx": "^4.20.0",
     "typescript": "^5.9.0",
