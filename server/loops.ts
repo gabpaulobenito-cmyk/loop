@@ -13,7 +13,7 @@ import {
   type UndoTop,
 } from '../shared/types';
 
-type ActionKind = 'create' | 'start' | 'stop' | 'close' | 'reopen' | 'priority' | 'edit';
+type ActionKind = 'create' | 'start' | 'stop' | 'close' | 'reopen' | 'priority' | 'edit' | 'delete';
 
 interface LoopRow {
   id: string;
@@ -27,6 +27,7 @@ interface LoopRow {
   accumulated_ms: number;
   version: number;
   updated_at: Date;
+  deleted_at: Date | null;
   session_count?: number;
 }
 
@@ -86,20 +87,20 @@ const CLOSED_LIMIT = 500;
 
 export async function listLoops(db: Pool | Client): Promise<Loop[]> {
   const { rows } = await db.query<LoopRow>(
-    `(${LOOP_SELECT} WHERE l.state <> 'closed')
+    `(${LOOP_SELECT} WHERE l.deleted_at IS NULL AND l.state <> 'closed')
      UNION ALL
-     (${LOOP_SELECT} WHERE l.state = 'closed' ORDER BY l.closed_at DESC LIMIT ${CLOSED_LIMIT})`,
+     (${LOOP_SELECT} WHERE l.deleted_at IS NULL AND l.state = 'closed' ORDER BY l.closed_at DESC LIMIT ${CLOSED_LIMIT})`,
   );
   return rows.map(toLoop);
 }
 
 export async function getLoop(db: Pool | Client, id: string): Promise<Loop | null> {
-  const { rows } = await db.query<LoopRow>(`${LOOP_SELECT} WHERE l.id = $1`, [id]);
+  const { rows } = await db.query<LoopRow>(`${LOOP_SELECT} WHERE l.id = $1 AND l.deleted_at IS NULL`, [id]);
   return rows[0] ? toLoop(rows[0]) : null;
 }
 
 export async function listSessions(db: Pool, loopId: string): Promise<Session[]> {
-  const exists = await db.query('SELECT 1 FROM loops WHERE id = $1', [loopId]);
+  const exists = await db.query('SELECT 1 FROM loops WHERE id = $1 AND deleted_at IS NULL', [loopId]);
   if (!exists.rowCount) throw notFound();
   const { rows } = await db.query<{ id: string; loop_id: string; started_at: Date; ended_at: Date | null }>(
     `SELECT id, loop_id, started_at, ended_at FROM loop_sessions WHERE loop_id = $1 ORDER BY started_at DESC LIMIT 500`,
@@ -135,9 +136,9 @@ interface Action {
   sessionEndedId?: string;
 }
 
-async function lockLoop(c: Client, id: string): Promise<LoopRow> {
+async function lockLoop(c: Client, id: string, includeDeleted = false): Promise<LoopRow> {
   const { rows } = await c.query<LoopRow>('SELECT * FROM loops WHERE id = $1 FOR UPDATE', [id]);
-  if (!rows[0]) throw notFound();
+  if (!rows[0] || (rows[0].deleted_at && !includeDeleted)) throw notFound();
   return rows[0];
 }
 
@@ -308,6 +309,33 @@ export function updateLoop(
   });
 }
 
+/**
+ * Delete a loop. It disappears everywhere at once, but the row is kept for a
+ * while so the action can be undone. A running session is finalized first.
+ */
+export async function deleteLoop(pool: Pool, id: string, now: number): Promise<MutationResult> {
+  return withTx(pool, async (c) => {
+    const row = await lockLoop(c, id);
+    let accumulatedMs = Number(row.accumulated_ms);
+    let sessionEndedId: string | undefined;
+    let state = row.state;
+    if (row.state === 'running') {
+      const done = await finishSession(c, row, now);
+      accumulatedMs = done.accumulatedMs;
+      sessionEndedId = done.sessionId;
+      state = 'open';
+    }
+    await c.query(
+      `UPDATE loops SET deleted_at = $2, state = $3, running_since = NULL, accumulated_ms = $4,
+         version = version + 1, updated_at = $2 WHERE id = $1`,
+      [id, new Date(now), state, accumulatedMs],
+    );
+    await recordAction(c, id, snapshot(row), { kind: 'delete', label: `Deleted ${quote(row.title)}`, sessionEndedId }, now);
+    await c.query(`DELETE FROM loops WHERE deleted_at < $1`, [new Date(now - 7 * 86_400_000)]);
+    return { loop: null, deletedId: id, undo: await getUndoTop(c, now), changed: true };
+  });
+}
+
 /** Revert the most recent action (within the undo window). */
 export async function undoLast(pool: Pool, now: number): Promise<MutationResult> {
   return withTx(pool, async (c) => {
@@ -327,7 +355,7 @@ export async function undoLast(pool: Pool, now: number): Promise<MutationResult>
     const h = rows[0];
     if (!h) throw new HttpError(409, 'nothing_to_undo', 'Nothing to undo');
 
-    const row = await lockLoop(c, h.loop_id);
+    const row = await lockLoop(c, h.loop_id, true);
     if (h.kind === 'create') {
       await c.query('DELETE FROM loops WHERE id = $1', [h.loop_id]);
       return { loop: null, deletedId: h.loop_id, undo: await getUndoTop(c, now), changed: true };
@@ -345,7 +373,7 @@ export async function undoLast(pool: Pool, now: number): Promise<MutationResult>
     }
     await c.query(
       `UPDATE loops SET title = $2, note = $3, priority = $4, state = $5, closed_at = $6, running_since = $7,
-         accumulated_ms = $8, version = $10, updated_at = $9 WHERE id = $1`,
+         accumulated_ms = $8, version = $10, updated_at = $9, deleted_at = NULL WHERE id = $1`,
       // Restoring the prior version lets the next-older action be undone too.
       [h.loop_id, b.title, b.note, b.priority, b.state, at(b.closedAt), at(b.runningSince), b.accumulatedMs, new Date(now), b.version],
     );

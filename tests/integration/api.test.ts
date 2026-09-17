@@ -212,6 +212,54 @@ describe('priority and edits', () => {
   });
 });
 
+describe('delete', () => {
+  const del = (id: string) => agent.delete(`/api/loops/${id}`).set('x-loop-client', '1');
+
+  it('removes a loop from state and blocks further actions', async () => {
+    const l = await create('Delete me', { note: 'bye' });
+    const r = await del(l.id).expect(200);
+    expect(r.body).toMatchObject({ loop: null, deletedId: l.id });
+    expect(r.body.undo.label).toBe('Deleted Delete me');
+    const state = await agent.get('/api/state').expect(200);
+    expect(state.body.loops.find((x: Loop) => x.id === l.id)).toBeUndefined();
+    await post(`/api/loops/${l.id}/start`).expect(404);
+    await patch(`/api/loops/${l.id}`, { title: 'nope' }).expect(404);
+    await agent.get(`/api/loops/${l.id}/sessions`).expect(404);
+    await del(l.id).expect(404);
+  });
+
+  it('requires the client header', async () => {
+    const l = await create('Guarded');
+    await agent.delete(`/api/loops/${l.id}`).expect(403);
+  });
+
+  it('finalizes a running session, and undo restores it running with its session', async () => {
+    const l = await create('Running delete', { start: true });
+    clock.advance(12 * M);
+    await del(l.id).expect(200);
+    const { rows } = await pool.query('SELECT ended_at FROM loop_sessions WHERE loop_id = $1', [l.id]);
+    expect(rows[0].ended_at).not.toBeNull();
+
+    clock.advance(M);
+    const r = await post('/api/undo').expect(200);
+    expect(r.body.loop).toMatchObject({ id: l.id, state: 'running', accumulatedMs: 0, title: 'Running delete' });
+    expect(r.body.loop.runningSince).toBe(clock.now() - 13 * M);
+    const s = await sessions(l.id);
+    expect(s).toHaveLength(1);
+    expect(s[0].endedAt).toBeNull();
+  });
+
+  it('purges loops deleted more than 7 days ago', async () => {
+    const old = await create('Old deleted');
+    await del(old.id).expect(200);
+    clock.advance(8 * 24 * H);
+    const other = await create('Trigger purge');
+    await del(other.id).expect(200);
+    const { rows } = await pool.query('SELECT id FROM loops WHERE id = $1', [old.id]);
+    expect(rows).toHaveLength(0);
+  });
+});
+
 describe('undo', () => {
   it('undoes a stop by resuming the same session', async () => {
     const l = await create('Undo stop', { start: true });

@@ -127,6 +127,80 @@ test.describe('core loop lifecycle (desktop)', () => {
   });
 });
 
+test.describe('loop settings menu', () => {
+  for (const width of [1024, 393, 220]) {
+    test(`edit title, edit note, delete and undo at ${width}px`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 800 });
+      await login(page);
+      await resetData(page.request);
+      const title = `Menu ${width} ${Date.now()}`;
+      await page.request.post('/api/loops', { headers: H, data: { id: crypto.randomUUID(), title, start: true } });
+      await page.reload();
+      const row = () => page.locator('[data-row]', { hasText: title.replace(/^Menu/, '') }).first();
+
+      // ⋮ sits beside start/stop and never toggles the row.
+      const more = page.getByRole('button', { name: `More actions for ${title}` });
+      await expect(more).toBeVisible();
+      const box = (await more.boundingBox())!;
+      expect(box.x + box.width).toBeLessThanOrEqual(width);
+      await more.click();
+      const menu = page.getByRole('menu', { name: `Actions for ${title}` });
+      await expect(menu).toBeVisible();
+      const mbox = (await menu.boundingBox())!;
+      expect(mbox.x).toBeGreaterThanOrEqual(0);
+      expect(mbox.x + mbox.width).toBeLessThanOrEqual(width);
+      await expect(row()).toHaveAttribute('data-state', 'running');
+
+      // Edit title
+      await menu.getByRole('menuitem', { name: 'EDIT TITLE' }).click();
+      const titleInput = page.getByRole('textbox', { name: 'Edit title' });
+      await expect(titleInput).toBeFocused();
+      const renamed = `${title} renamed`;
+      await titleInput.fill(renamed);
+      await titleInput.press('Enter');
+      const renamedRow = page.locator('[data-row]', { hasText: renamed });
+      await expect(renamedRow).toBeVisible();
+      await expect(renamedRow).toHaveAttribute('data-state', 'running');
+
+      // Escape cancels without saving
+      await page.getByRole('button', { name: `More actions for ${renamed}` }).click();
+      await page.getByRole('menuitem', { name: 'EDIT TITLE' }).click();
+      await page.getByRole('textbox', { name: 'Edit title' }).fill('should not save');
+      await page.getByRole('textbox', { name: 'Edit title' }).press('Escape');
+      await expect(renamedRow).toBeVisible();
+      await expect(page.locator('[data-row]', { hasText: 'should not save' })).toHaveCount(0);
+
+      // Add a note
+      await page.getByRole('button', { name: `More actions for ${renamed}` }).click();
+      await page.getByRole('menuitem', { name: 'ADD NOTE' }).click();
+      await page.getByRole('textbox', { name: 'Edit note' }).fill('note from menu');
+      await page.getByRole('button', { name: 'Save' }).click();
+      await expect(renamedRow).toContainText('note from menu');
+
+      // Persisted
+      await page.reload();
+      await expect(renamedRow).toContainText('note from menu');
+
+      // Delete needs a confirming second click
+      await page.getByRole('button', { name: `More actions for ${renamed}` }).click();
+      await page.getByRole('menuitem', { name: 'DELETE' }).click();
+      await expect(renamedRow).toBeVisible();
+      await page.getByRole('menuitem', { name: 'CONFIRM DELETE' }).click();
+      await expect(renamedRow).toHaveCount(0);
+      await expect
+        .poll(async () => (await (await page.request.get('/api/state', { headers: H })).json()).loops.some((l: { title: string }) => l.title === renamed))
+        .toBe(false);
+      await page.reload();
+      await expect(renamedRow).toHaveCount(0);
+
+      // Undo brings it back, still running
+      await page.getByRole('button', { name: /^Undo: Deleted/ }).click();
+      await expect(renamedRow).toBeVisible();
+      await expect(renamedRow).toHaveAttribute('data-state', 'running');
+    });
+  }
+});
+
 test.describe('slow network', () => {
   test.use({ viewport: { width: 1024, height: 800 } });
 

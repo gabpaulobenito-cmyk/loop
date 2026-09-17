@@ -284,10 +284,35 @@ ul {
 .tbtn--lg .g-play { border-left-width: 8px; border-top-width: 5px; border-bottom-width: 5px; margin-left: 2px; }
 .tbtn--lg .g-reopen { font-size: 14px; }
 
+/* ⋮ loop menu trigger — sits right beside start/stop */
+.mbtn {
+  position: relative;
+  flex: none;
+  width: 14px;
+  height: 21px;
+  margin-left: -5px;
+  display: grid;
+  place-items: center;
+  border-radius: 2px;
+  color: var(--muted-2);
+  opacity: 0.62;
+}
+.mbtn svg { width: 3px; height: 11px; fill: currentColor; display: block; }
+.mbtn:hover,
+.mbtn:focus-visible,
+.mbtn[aria-expanded='true'] { opacity: 1; color: var(--text-hi); background: var(--line-row); }
+.mbtn--sm { height: 18px; }
+.mbtn--xs { width: 10px; height: 13px; margin-left: -2px; opacity: 0.5; }
+.mbtn--xs svg { width: 2.5px; height: 9px; }
+.mbtn--lg { width: 22px; height: 30px; margin-left: -4px; opacity: 0.8; border-radius: 3px; }
+.mbtn--lg svg { width: 4px; height: 14px; }
+
 /* Larger invisible hit area for tiny controls on touch screens. */
 @media (pointer: coarse) {
   .tbtn--xs::after,
   .tbtn--sm::after,
+  .mbtn--xs::after,
+  .mbtn--sm::after,
   .hit::after {
     content: '';
     position: absolute;
@@ -747,6 +772,47 @@ ul {
 .row--mobile.row--closed .row__title { font-size: 13px; color: var(--muted-3); }
 .row--mobile.row--closed .row__closedat { min-width: 0; font-size: 11px; }
 
+/* Inline row editor */
+.row.is-editing { cursor: default; background: var(--hover); }
+.row--rail.is-editing { display: flex; align-items: center; gap: 5px; height: 30px; }
+.row--rail.is-editing .marker { margin-right: 0; }
+.row-edit { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; }
+.row-edit__label { flex: none; font: 500 9px/1 var(--f-mono); letter-spacing: 0.1em; color: var(--lime-ink); }
+.row-edit__input {
+  flex: 1;
+  min-width: 0;
+  height: 26px;
+  padding: 0 7px;
+  background: var(--bg);
+  border: 1px solid var(--lime-border);
+  border-radius: 2px;
+  outline: none;
+  font: 400 12.5px/1 var(--f-sans);
+  color: var(--text-hi);
+}
+.row-edit__input:focus { border-color: var(--lime-ink); }
+.row-edit__input::placeholder { color: var(--muted-3); }
+.row-edit__btn {
+  position: relative;
+  flex: none;
+  height: 22px;
+  padding: 0 7px;
+  border: 1px solid var(--line-ctl);
+  border-radius: 2px;
+  font: 500 9.5px/1 var(--f-mono);
+  letter-spacing: 0.08em;
+  color: var(--muted-2);
+}
+.row-edit__btn:hover { color: var(--text-hi); border-color: var(--line-ctl-hover); }
+.row-edit__btn--save { color: var(--lime-ink); border-color: var(--lime-border); }
+.row-edit__btn--save:hover { color: var(--lime-ink); border-color: var(--lime-ink); background: var(--lime-bg); }
+.row--rail .row-edit { gap: 4px; }
+.row--rail .row-edit__label { display: none; }
+.row--rail .row-edit__input { height: 21px; padding: 0 4px; font-size: 11px; }
+.row--rail .row-edit__btn { height: 17px; padding: 0 4px; font-size: 9px; }
+.row--mobile .row-edit__input { height: 34px; font-size: 14px; }
+.row--mobile .row-edit__btn { height: 30px; padding: 0 9px; }
+
 /* ── Marquee for overflowing notes ──────────────────────────────────────── */
 
 .marquee { overflow: hidden; min-width: 0; }
@@ -999,6 +1065,22 @@ ul {
   letter-spacing: 0.08em;
   color: var(--muted);
 }
+.menu--compact { min-width: 168px; }
+.menu__title {
+  padding: 5px 10px 6px;
+  max-width: 240px;
+  font: 500 11px/1.3 var(--f-sans);
+  letter-spacing: 0;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 4px;
+}
+.menu__item--danger { color: var(--text-2); }
+.menu__item--danger.is-confirming,
+.menu__item--danger.is-confirming:hover { color: var(--text-hi); font-weight: 600; background: var(--line-ctl); }
 .menu__group { padding: 6px 10px 4px; font: 600 9.5px/1 var(--f-cond); letter-spacing: 0.2em; color: var(--muted-3); }
 .menu__opts { display: flex; flex-wrap: wrap; gap: 2px; padding: 0 7px 6px; }
 .menu__item {

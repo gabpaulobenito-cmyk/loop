@@ -146,7 +146,7 @@ export class LoopStore {
   }
 
   private applyState(s: StateResponse) {
-    this.set({ loops: s.loops, settings: s.settings, undo: s.undo });
+    this.set({ loops: s.loops.filter((l) => !this.removed.has(l.id)), settings: s.settings, undo: s.undo });
     this.cacheTheme(s.settings.theme);
   }
 
@@ -173,7 +173,11 @@ export class LoopStore {
 
   // ── Mutations ─────────────────────────────────────────────────────────────
 
+  /** Loops removed locally; late responses for them must not bring them back. */
+  private removed = new Set<string>();
+
   private replaceLoop(loop: Loop) {
+    if (this.removed.has(loop.id)) return;
     const exists = this.state.loops.some((l) => l.id === loop.id);
     this.set({
       loops: exists ? this.state.loops.map((l) => (l.id === loop.id ? loop : l)) : [loop, ...this.state.loops],
@@ -408,12 +412,37 @@ export class LoopStore {
     );
   }
 
+  /** Delete a loop. It vanishes immediately; the server keeps it undoable for 30 minutes. */
+  async remove(id: string): Promise<boolean> {
+    const before = this.state.loops.find((l) => l.id === id);
+    if (!before || !this.canMutate()) return false;
+    // Let queued actions on this loop land first so the delete is the last word.
+    const q = this.queues.get(id);
+    this.removed.add(id);
+    this.mutationSeq++;
+    this.set({ loops: this.state.loops.filter((l) => l.id !== id) });
+    try {
+      if (q) await q.tail;
+      const r = await api<LoopMutationResponse>(`/loops/${id}`, { method: 'DELETE' });
+      this.set({ undo: r.undo });
+      return true;
+    } catch (err) {
+      this.removed.delete(id);
+      if (err instanceof ApiError && err.status === 404) return true; // already gone
+      this.set({ loops: [before, ...this.state.loops.filter((l) => l.id !== id)] });
+      if (err instanceof ApiError && err.status === 0) this.set({ online: false });
+      this.notify(`Couldn’t delete — ${(err as Error).message}`);
+      return false;
+    }
+  }
+
   async undo() {
     if (!this.state.undo || this.state.undoPending || !this.canMutate()) return;
     this.mutationSeq++;
     this.set({ undoPending: true });
     try {
       const r = await api<LoopMutationResponse>('/undo', { method: 'POST' });
+      if (r.loop) this.removed.delete(r.loop.id);
       if (r.deletedId) this.set({ loops: this.state.loops.filter((l) => l.id !== r.deletedId) });
       if (r.loop) this.replaceLoop(r.loop);
       this.set({ undo: r.undo });

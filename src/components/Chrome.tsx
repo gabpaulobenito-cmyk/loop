@@ -1,4 +1,4 @@
-import { forwardRef, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, type RefObject } from 'react';
+import { forwardRef, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, type RefObject } from 'react';
 import { pad2 } from '../../shared/format';
 import type { Mode } from '../hooks/useViewport';
 
@@ -287,34 +287,53 @@ export function MenuPopover({
   anchor,
   onClose,
   children,
+  label = 'Menu',
+  compact = false,
 }: {
   anchor: HTMLElement | null;
   onClose: () => void;
   children: ReactNode;
+  label?: string;
+  compact?: boolean;
 }) {
   const ref = useRef<HTMLDivElement>(null);
-  const [pos, setPos] = useState<{ top: number; right: number }>({ top: 40, right: 8 });
+  const [pos, setPos] = useState<{ top: number; right: number } | null>(null);
 
-  useEffect(() => {
+  // Anchor under the trigger, flipping above it when there isn't room below.
+  useLayoutEffect(() => {
     const place = () => {
-      if (!anchor) return;
+      if (!anchor) return setPos({ top: 40, right: 8 });
       const r = anchor.getBoundingClientRect();
-      setPos({ top: r.bottom + 4, right: Math.max(6, window.innerWidth - r.right) });
+      const h = ref.current?.offsetHeight ?? 0;
+      const below = r.bottom + 4;
+      const top = below + h > window.innerHeight - 8 && r.top - h - 4 > 8 ? r.top - h - 4 : below;
+      setPos({ top, right: Math.max(6, window.innerWidth - r.right) });
     };
     place();
     window.addEventListener('resize', place);
-    ref.current?.querySelector<HTMLElement>('button')?.focus();
     return () => window.removeEventListener('resize', place);
   }, [anchor]);
 
+  useEffect(() => {
+    ref.current?.querySelector<HTMLElement>('button')?.focus();
+  }, []);
+
   return (
     <>
-      <div className="scrim" style={{ background: 'transparent' }} onClick={onClose} />
+      <div className="scrim" style={{ background: 'transparent' }} onClick={(e) => { e.stopPropagation(); onClose(); }} />
       <div
         ref={ref}
-        className="menu"
+        className={`menu${compact ? ' menu--compact' : ''}`}
         role="menu"
-        style={{ top: pos.top, right: pos.right, maxHeight: `calc(100dvh - ${pos.top + 8}px)`, overflowY: 'auto' }}
+        aria-label={label}
+        style={{
+          top: pos?.top ?? 0,
+          right: pos?.right ?? 0,
+          visibility: pos ? 'visible' : 'hidden',
+          maxHeight: `calc(100dvh - ${(pos?.top ?? 0) + 8}px)`,
+          overflowY: 'auto',
+        }}
+        onClick={(e) => e.stopPropagation()}
         onKeyDown={(e) => {
           if (e.key === 'Escape') {
             e.stopPropagation();

@@ -49,3 +49,38 @@ export function ToggleButton({ loop, size = 'md', disabled, onToggle, onReopen }
     </button>
   );
 }
+
+/** Vertical three-dot button that opens a loop's settings menu. */
+export function MoreButton({
+  title,
+  size,
+  expanded,
+  onOpen,
+}: {
+  title: string;
+  size: Size;
+  expanded: boolean;
+  onOpen: (anchor: HTMLElement) => void;
+}) {
+  return (
+    <button
+      type="button"
+      className={`mbtn mbtn--${size}`}
+      data-ctl="more"
+      title="MORE"
+      aria-label={`More actions for ${title}`}
+      aria-haspopup="menu"
+      aria-expanded={expanded}
+      onClick={(e) => {
+        e.stopPropagation();
+        onOpen(e.currentTarget);
+      }}
+    >
+      <svg viewBox="0 0 4 14" aria-hidden="true" focusable="false">
+        <circle cx="2" cy="2" r="1.35" />
+        <circle cx="2" cy="7" r="1.35" />
+        <circle cx="2" cy="12" r="1.35" />
+      </svg>
+    </button>
+  );
+}

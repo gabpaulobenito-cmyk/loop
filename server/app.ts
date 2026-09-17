@@ -164,6 +164,14 @@ export function createApp(opts: AppOptions) {
     );
   }
 
+  api.delete(
+    '/loops/:id',
+    wrap(async (req, res) => {
+      const id = parse(idParam, req.params.id);
+      send(res, await loops.deleteLoop(pool, id, clock()));
+    }),
+  );
+
   api.get(
     '/loops/:id/sessions',
     wrap(async (req, res) => {
