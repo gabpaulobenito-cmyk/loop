@@ -960,7 +960,7 @@ ul {
   position: fixed;
   z-index: 50;
   left: 50%;
-  top: 44%;
+  top: 50%;
   transform: translate(-50%, -50%);
   max-height: calc(100dvh - 24px);
   display: flex;
@@ -974,7 +974,7 @@ ul {
   to { opacity: 1; transform: translate(-50%, -50%); }
 }
 .capture { width: min(580px, calc(100vw - 24px)); overflow-y: auto; }
-.insp-modal { width: min(600px, calc(100vw - 24px)); max-height: min(720px, calc(100dvh - 48px)); top: 42%; }
+.insp-modal { width: min(600px, calc(100vw - 24px)); max-height: min(720px, calc(100dvh - 48px)); }
 .insp-modal > .inspector { flex: 1 1 auto; min-height: 0; }
 .insp-modal .inspector__scroll { flex: 1 1 auto; }
 
@@ -1055,13 +1055,10 @@ ul {
 
 /* Phones: pin pop-ups near the top so the keyboard never covers them. */
 @media (max-width: 599px) {
+  /* Centered like on desktop, with a little more breathing room at the sides. */
   .capture,
-  .insp-modal {
-    top: calc(env(safe-area-inset-top, 0px) + 10px);
-    transform: translateX(-50%);
-    animation: none;
-  }
-  .insp-modal { max-height: calc(100dvh - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px) - 20px); }
+  .insp-modal { width: calc(100vw - 48px); }
+  .insp-modal { max-height: calc(100dvh - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px) - 48px); }
   .term-bar { padding-left: 14px; }
   .capture__field { padding: 16px 14px 14px; }
   .capture__field--note { padding-top: 14px; padding-bottom: 18px; }
@@ -1074,7 +1071,7 @@ ul {
 }
 @media (max-width: 299px) {
   .capture,
-  .insp-modal { width: calc(100vw - 12px); top: calc(env(safe-area-inset-top, 0px) + 6px); }
+  .insp-modal { width: calc(100vw - 24px); }
   .term-bar { padding-left: 10px; }
   .term-bar__prefix { display: none; }
   .capture__field { padding: 12px 10px 10px; }
@@ -1086,6 +1083,14 @@ ul {
   .capture__foot { flex-direction: column-reverse; }
   .capture__start,
   .capture__secondary { flex: none; min-width: 0; height: 38px; padding: 0 10px; text-align: center; }
+}
+/* On touch phones the on-screen keyboard opens with the new-loop form, so keep it high. */
+@media (max-width: 599px) and (pointer: coarse) {
+  .capture {
+    top: calc(env(safe-area-inset-top, 0px) + 16px);
+    transform: translateX(-50%);
+    animation: none;
+  }
 }
 @media (pointer: coarse) {
   .capbar__hint kbd { display: none; }
