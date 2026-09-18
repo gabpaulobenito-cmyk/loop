@@ -188,7 +188,7 @@ test.describe('new loop pop-up', () => {
 });
 
 test.describe('row opens the details pop-up', () => {
-  for (const width of [1280, 393, 220]) {
+  for (const width of [1100, 393, 220]) {
     test(`rename, note, delete and undo from the pop-up at ${width}px`, async ({ page }) => {
       await page.setViewportSize({ width, height: 800 });
       await login(page);
@@ -256,8 +256,65 @@ test.describe('row opens the details pop-up', () => {
   }
 });
 
+test.describe('wide windows dock the details', () => {
+  test.use({ viewport: { width: 1440, height: 900 } });
+
+  test('details live in a second column, and pop up again once the window narrows', async ({ page }) => {
+    await login(page);
+    await resetData(page.request);
+    const stamp = Date.now();
+    const running = `Docked running ${stamp}`;
+    const open = `Docked open ${stamp}`;
+    await page.request.post('/api/loops', { headers: H, data: { id: crypto.randomUUID(), title: running, start: true } });
+    await page.request.post('/api/loops', { headers: H, data: { id: crypto.randomUUID(), title: open } });
+    await page.reload();
+
+    await expect(page.locator('.app')).toHaveAttribute('data-mode', 'wide');
+    const pane = page.locator('.insp-pane');
+    await expect(pane).toBeVisible();
+    await expect(page.getByRole('dialog', { name: 'Loop details' })).toHaveCount(0);
+
+    // The running loop is selected for us, so the column is never empty.
+    await expect(pane.locator('.insp-head__title')).toHaveText(running);
+    const runningRow = page.locator('[data-row]', { hasText: running });
+    await expect(runningRow).toHaveClass(/is-selected/);
+
+    // The pane sits beside the list, not over it, and keeps square corners.
+    const listBox = (await page.locator('.list').boundingBox())!;
+    const paneBox = (await pane.boundingBox())!;
+    expect(paneBox.x).toBeGreaterThanOrEqual(listBox.x + listBox.width - 1);
+    expect(paneBox.x + paneBox.width).toBeLessThanOrEqual(1440.5);
+    expect(await pane.evaluate((el) => getComputedStyle(el).borderRadius)).toBe('0px');
+
+    // Clicking another row swaps the column's contents without touching its state.
+    const openRow = page.locator('[data-row]', { hasText: open });
+    await openRow.click({ position: { x: 4, y: 4 } });
+    await expect(pane.locator('.insp-head__title')).toHaveText(open);
+    await expect(openRow).toHaveClass(/is-selected/);
+    await expect(page.getByRole('dialog', { name: 'Loop details' })).toHaveCount(0);
+    await page.waitForTimeout(200);
+    await expect(openRow).toHaveAttribute('data-state', 'open');
+
+    // Editing still works in the column.
+    await pane.getByRole('group', { name: 'Loop actions' }).getByRole('button', { name: 'RENAME' }).click();
+    const renamed = `${open} renamed`;
+    await pane.getByRole('textbox', { name: 'Loop title' }).fill(renamed);
+    await pane.getByRole('textbox', { name: 'Loop title' }).press('Enter');
+    await expect(pane.locator('.insp-head__title')).toHaveText(renamed);
+
+    // Narrower windows go back to the centered pop-up.
+    await page.setViewportSize({ width: 1024, height: 900 });
+    await expect(page.locator('.app')).toHaveAttribute('data-mode', 'desk');
+    await expect(pane).toHaveCount(0);
+    await page.locator('[data-row]', { hasText: renamed }).click({ position: { x: 4, y: 4 } });
+    const dialog = page.getByRole('dialog', { name: 'Loop details' });
+    await expect(dialog).toBeVisible();
+    await expect(dialog.locator('.insp-head__title')).toHaveText(renamed);
+  });
+});
+
 test.describe('edit start time', () => {
-  for (const width of [1280, 393, 220]) {
+  for (const width of [1100, 393, 220]) {
     test(`backdate a running loop with the calendar at ${width}px, then undo`, async ({ page }) => {
       await page.setViewportSize({ width, height: 900 });
       await login(page);
@@ -359,7 +416,7 @@ test.describe('edit start time', () => {
     target.setDate(target.getDate() - 3);
     if (target.getMonth() !== new Date().getMonth()) await editor.getByRole('button', { name: 'Previous month' }).click();
     await editor.getByRole('gridcell', { name: target.toDateString() }).click();
-    await editor.getByLabel('// TIME').fill('09:30');
+    await editor.getByLabel('// TIME').fill('00:30');
     await expect(editor).toContainText('OPEN FOR → 3 days');
     await editor.getByLabel('// TIME').press('Enter');
     await expect(editor).toHaveCount(0);
@@ -376,12 +433,12 @@ test.describe('edit start time', () => {
     const s = await (await page.request.get('/api/state', { headers: H })).json();
     const l = s.loops.find((x: { title: string }) => x.title === title);
     const opened = new Date(l.createdAt);
-    expect([opened.getDate(), opened.getHours(), opened.getMinutes()]).toEqual([target.getDate(), 9, 30]);
+    expect([opened.getDate(), opened.getHours(), opened.getMinutes()]).toEqual([target.getDate(), 0, 30]);
   });
 });
 
 test.describe('ball in court', () => {
-  for (const width of [1280, 393, 220]) {
+  for (const width of [1100, 393, 220]) {
     test(`delegate, follow up, filter and take back at ${width}px`, async ({ page }) => {
       await page.setViewportSize({ width, height: 900 });
       await login(page);

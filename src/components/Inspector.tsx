@@ -23,6 +23,8 @@ export interface InspectorActions {
 interface Props {
   loop: Loop | null;
   now: number;
+  /** Docked as the second column on wide windows (no dismiss, no focus grab). */
+  docked?: boolean;
   pending: boolean;
   keysEnabled: boolean;
   onDismiss: () => void;
@@ -60,7 +62,7 @@ function useSessions(loop: Loop | null) {
   return state && state.loopId === id ? state : null;
 }
 
-export function Inspector({ loop, now, pending, keysEnabled, onDismiss, actions }: Props) {
+export function Inspector({ loop, now, docked = false, pending, keysEnabled, onDismiss, actions }: Props) {
   const rootRef = useRef<HTMLElement>(null);
   const [editing, setEditing] = useState<'title' | 'note' | null>(null);
   const [draft, setDraft] = useState('');
@@ -88,11 +90,13 @@ export function Inspector({ loop, now, pending, keysEnabled, onDismiss, actions 
   useEffect(() => setEdit(null), [loop?.id]);
 
   // Move focus into the pop-up so keyboard users land in the detail.
+  // The docked column is always on screen, so it never steals focus.
   useEffect(() => {
+    if (docked) return;
     const prev = document.activeElement as HTMLElement | null;
     rootRef.current?.querySelector<HTMLElement>('[data-autofocus]')?.focus();
     return () => prev?.focus?.();
-  }, []);
+  }, [docked]);
 
   const beginEdit = (field: 'title' | 'note') => {
     if (!loop) return;
@@ -117,6 +121,9 @@ export function Inspector({ loop, now, pending, keysEnabled, onDismiss, actions 
       if (e.metaKey || e.ctrlKey || e.altKey || e.defaultPrevented) return;
       const t = e.target as HTMLElement;
       if (t.closest('input, textarea, [contenteditable="true"]')) return;
+      // Docked, the panel shares the screen with the list — only act when focus is inside it.
+      const within = !docked || !!rootRef.current?.contains(document.activeElement);
+      if (!within) return;
       const k = e.key.toLowerCase();
       if (k === 's') {
         e.preventDefault();
@@ -137,7 +144,7 @@ export function Inspector({ loop, now, pending, keysEnabled, onDismiss, actions 
     return () => window.removeEventListener('keydown', onKey);
   });
 
-  const dismiss = (
+  const dismiss = docked ? null : (
     <button type="button" className="term-bar__esc" aria-label="Close details" onClick={onDismiss} data-autofocus={loop ? undefined : true}>
       ESC ✕
     </button>
@@ -154,7 +161,7 @@ export function Inspector({ loop, now, pending, keysEnabled, onDismiss, actions 
         <div className="insp-empty">
           NO LOOP SELECTED
           <br />
-          CLICK A TIMER OR AGE TO INSPECT ITS SESSIONS
+          CLICK A ROW TO SEE ITS SESSIONS
         </div>
       </section>
     );

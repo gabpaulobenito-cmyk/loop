@@ -43,6 +43,8 @@ export function Workspace() {
   const mode = useMode();
   const rowVariant: RowVariant = mode === 'rail' ? 'rail' : mode === 'mobile' ? 'mobile' : 'desk';
   const compact = mode === 'rail' || mode === 'mobile';
+  // Wide windows dock the details as a second column instead of popping it up.
+  const wide = mode === 'wide';
 
   const [query, setQuery] = useState('');
   const [searchOpen, setSearchOpen] = useState(false);
@@ -102,12 +104,21 @@ export function Workspace() {
   };
 
   const selected = s.loops.find((l) => l.id === selectedId) ?? null;
-  const inspectorVisible = overlay && !!selected;
+  const inspectorVisible = (wide || overlay) && !!selected;
 
-  // Close the overlay if its loop disappears (e.g. undoing its creation).
+  // The docked column always shows something useful.
   useEffect(() => {
-    if (overlay && !selected) setOverlay(false);
-  }, [overlay, selected]);
+    if (!wide || s.load !== 'ready') return;
+    if (selectedId && s.loops.some((l) => l.id === selectedId)) return;
+    const first = sortRunning(allRunning, settings.runSort, now)[0] ?? sortOpen(allOpen, settings.openSort)[0];
+    setSelectedId(first?.id ?? null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [wide, s.load, s.loops, selectedId]);
+
+  // Close the pop-up if its loop disappears, or once the window is wide enough to dock.
+  useEffect(() => {
+    if (overlay && (!selected || wide)) setOverlay(false);
+  }, [overlay, selected, wide]);
 
   // ── Actions (stable references keep memoized rows cheap) ────────────────
   const rowActions = useMemo<RowActions>(
@@ -116,10 +127,10 @@ export function Workspace() {
       reopen: (id) => void store.reopen(id),
       inspect: (id) => {
         setSelectedId(id);
-        setOverlay(true);
+        if (!wide) setOverlay(true);
       },
     }),
-    [],
+    [wide],
   );
 
 
@@ -574,10 +585,11 @@ export function Workspace() {
     </div>
   );
 
-  const inspectorFor = (onDismiss: () => void) => (
+  const inspectorFor = (onDismiss: () => void, docked = false) => (
     <Inspector
       loop={selected}
       now={now}
+      docked={docked}
       pending={selected ? !!s.pending[selected.id] : false}
       keysEnabled={!captureOpen && !menuOpen}
       onDismiss={onDismiss}
@@ -626,10 +638,11 @@ export function Workspace() {
         <main className="list" aria-label="Loops">
           {listContent}
         </main>
+        {wide && <aside className="insp-pane">{inspectorFor(() => setSelectedId(null), true)}</aside>}
       </div>
       {statusBar}
 
-      {overlay && selected && (
+      {!wide && overlay && selected && (
         <>
           <div className="scrim scrim--modal" onClick={() => setOverlay(false)} />
           <div className="insp-modal" role="dialog" aria-modal="true" aria-label="Loop details">

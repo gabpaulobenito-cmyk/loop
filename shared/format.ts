@@ -72,9 +72,37 @@ export function ageLevel(ageMs: number): 0 | 1 | 2 | 3 | 4 {
   return 0;
 }
 
+/**
+ * Neglect marker for an elapsed loop: one step at two weeks, one more at a
+ * month. Deliberately three steps and no colour of alarm — long-neglected
+ * loops should be scannable, not shouted about.
+ */
+export function neglectMark(ageMs: number): 0 | 1 | 2 {
+  const days = ageMs / DAY;
+  if (days >= 30) return 2;
+  if (days >= 14) return 1;
+  return 0;
+}
+
 export const pad2 = (n: number) => p2(n);
 
 const MONTHS = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
+const WEEKDAYS = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
+
+/** Calendar label for a date input or status line: "THU OCT 2". */
+export function fmtDateLabel(ts: number): string {
+  const d = new Date(ts);
+  return `${WEEKDAYS[d.getDay()]} ${MONTHS[d.getMonth()]} ${d.getDate()}`;
+}
+
+/** Whole local days from `from` to `to` (negative once `to` is in the past). */
+export function dayGap(from: number, to: number): number {
+  const startOf = (t: number) => {
+    const d = new Date(t);
+    return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  };
+  return Math.round((startOf(to) - startOf(from)) / DAY);
+}
 
 /** "TODAY", "YESTERDAY" or "SEP 14" in local time. */
 export function fmtDay(ts: number, now: number): string {

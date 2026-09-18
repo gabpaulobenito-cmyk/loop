@@ -1159,6 +1159,16 @@ ul {
 .insp-modal > .inspector { flex: 1 1 auto; min-height: 0; }
 .insp-modal .inspector__scroll { flex: 1 1 auto; }
 
+/* Wide windows dock the details beside the list as a second column. */
+.insp-pane {
+  flex: none;
+  width: clamp(380px, 32vw, 520px);
+  border-left: 1px solid var(--line);
+  display: flex;
+  min-height: 0;
+}
+.insp-pane > .inspector { flex: 1; min-width: 0; }
+
 .capture__field { padding: 20px 20px 18px; }
 .capture__field--title { border-bottom: 1px solid var(--line); }
 .capture__field--note { padding-top: 16px; padding-bottom: 22px; }
