@@ -68,6 +68,17 @@ export function isFireTier(loop: DeadlineFields, now: number): boolean {
   return tier === 'urgent' || tier === 'overdue';
 }
 
+/**
+ * Stable partition putting fire-tier loops first, soonest deadline at the top.
+ * Used where two already-sorted lists are shown as one.
+ */
+export function hoistFireTier(loops: Loop[], now: number): Loop[] {
+  const fire = loops.filter((l) => isFireTier(l, now));
+  if (!fire.length || fire.length === loops.length) return loops;
+  fire.sort((a, b) => (a.deadlineAt ?? 0) - (b.deadlineAt ?? 0) || a.id.localeCompare(b.id));
+  return [...fire, ...loops.filter((l) => !isFireTier(l, now))];
+}
+
 const byTitle = (a: Loop, b: Loop) =>
   a.title.localeCompare(b.title, undefined, { sensitivity: 'base', numeric: true });
 

@@ -1,8 +1,9 @@
 import { memo, type KeyboardEvent, type MouseEvent } from 'react';
-import { ageLevel, fmtAge, fmtHM } from '../../shared/format';
+import { ageLevel, fmtAge, fmtHM, neglectMark } from '../../shared/format';
 import { TimerText } from './TimerText';
-import { elapsedMs } from '../../shared/timer';
+import { deadlineTier, elapsedMs } from '../../shared/timer';
 import type { Loop } from '../../shared/types';
+import { Countdown } from './Countdown';
 import { Marker } from './Marker';
 import { Marquee } from './Marquee';
 import { ToggleButton } from './Glyphs';
@@ -60,6 +61,9 @@ function LoopRowImpl({ loop, variant, now, pending, selected, actions }: Props) 
   // Ball in court: delegated / waiting loops are out of your hands.
   const out = loop.owner !== 'mine' && !closed;
   const due = out && loop.followUpAt != null && loop.followUpAt <= now;
+  // A countdown loop reads its deadline instead of its own age, whoever holds it.
+  const tier = deadlineTier(loop, now);
+  const countdown = tier !== 'none';
 
   const cls = [
     'row',
@@ -104,17 +108,20 @@ function LoopRowImpl({ loop, variant, now, pending, selected, actions }: Props) 
       <TimerText ms={now - (loop.handedOffAt ?? now)} />
     </span>
   );
-  const timer = () => (out ? outClock : <TimerText className="row__timer" ms={total} />);
-  const ageLabel = out ? outClock : <span className="row__age">{fmtAge(age)}</span>;
+  const deadline = countdown ? <Countdown loop={loop} now={now} className="row__dl" /> : null;
+  const timer = () => deadline ?? (out ? outClock : <TimerText className="row__timer" ms={total} />);
+  const ageLabel = deadline ?? (out ? outClock : <span className="row__age">{fmtAge(age)}</span>);
   const toggle = (size: 'xs' | 'sm' | 'md' | 'lg') => (
     <ToggleButton loop={loop} size={size} onToggle={() => actions.toggle(id)} onReopen={() => actions.reopen(id)} />
   );
+  const marker = <Marker loop={loop} tier={tier} mark={neglectMark(age)} />;
   const common = {
     className: cls,
     'data-row': id,
     'data-state': state,
     'data-priority': priority ? 'true' : 'false',
-    'data-age': state === 'open' ? ageLevel(age) : undefined,
+    'data-age': state === 'open' && !countdown ? ageLevel(age) : undefined,
+    'data-tier': countdown ? tier : undefined,
     'data-owner': loop.owner,
     'aria-busy': pending || undefined,
     onClick: onRowClick,
@@ -125,7 +132,7 @@ function LoopRowImpl({ loop, variant, now, pending, selected, actions }: Props) 
     return (
       <li {...common}>
         <div className="row__line">
-          <Marker loop={loop} />
+          {marker}
           {titleBtn}
           {running && timer()}
           {state === 'open' && ageLabel}
@@ -147,7 +154,7 @@ function LoopRowImpl({ loop, variant, now, pending, selected, actions }: Props) 
   if (variant === 'mobile') {
     return (
       <li {...common}>
-        <Marker loop={loop} />
+        {marker}
         <div className="row__body">
           {titleBtn}
           {(note || out) && (
@@ -169,7 +176,7 @@ function LoopRowImpl({ loop, variant, now, pending, selected, actions }: Props) 
   if (closed) {
     return (
       <li {...common}>
-        <Marker loop={loop} />
+        {marker}
         {titleBtn}
         <span className="row__active">{loop.accumulatedMs > 0 ? fmtHM(loop.accumulatedMs) : '—'}</span>
         <span className="row__closedat">{fmtAge(now - (loop.closedAt ?? now))} ago</span>
@@ -180,18 +187,18 @@ function LoopRowImpl({ loop, variant, now, pending, selected, actions }: Props) 
 
   return (
     <li {...common}>
-      <Marker loop={loop} />
+      {marker}
       {titleBtn}
       {note && <span className="row__div" aria-hidden="true" />}
       {note ? <Marquee className="row__note" text={note} /> : <span className="row__note" />}
       {ownerTag}
       <span className="row__div" aria-hidden="true" />
-      {running ? (
+      {running && !deadline ? (
         timer()
       ) : (
         <>
           <span className="row__active" title="Active time">
-            {loop.accumulatedMs > 0 ? fmtHM(loop.accumulatedMs) : '—'}
+            {running ? fmtHM(total) : loop.accumulatedMs > 0 ? fmtHM(loop.accumulatedMs) : '—'}
           </span>
           {ageLabel}
         </>
@@ -215,7 +222,13 @@ export const LoopRow = memo(LoopRowImpl, (a, b) => {
   ) {
     return false;
   }
-  // Running timers and OUT clocks tick every second; the rest change once a minute.
-  if (a.loop.state === 'running' || (a.loop.owner !== 'mine' && a.loop.state !== 'closed')) return a.now === b.now;
+  // Running timers, countdowns and OUT clocks tick every second; the rest change once a minute.
+  if (
+    a.loop.state === 'running' ||
+    (a.loop.timerType === 'countdown' && a.loop.state !== 'closed') ||
+    (a.loop.owner !== 'mine' && a.loop.state !== 'closed')
+  ) {
+    return a.now === b.now;
+  }
   return Math.floor(a.now / 60_000) === Math.floor(b.now / 60_000);
 });

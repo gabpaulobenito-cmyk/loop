@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ageLevel, fmtAge, fmtDuration, fmtHeaderClock, fmtHM, fmtTimer, timerParts } from '../../shared/format';
+import { ageLevel, dayGap, fmtAge, fmtDateLabel, fmtDuration, fmtHeaderClock, fmtHM, fmtTimer, neglectMark, timerParts } from '../../shared/format';
 
 const S = 1000, M = 60 * S, H = 60 * M, D = 24 * H;
 
@@ -50,5 +50,29 @@ describe('fmtHeaderClock', () => {
     expect(fmtHeaderClock(new Date(2026, 8, 18, 0, 5).getTime())).toEqual({ weekday: 'Fri', date: 'Sep 18', time: '12:05AM' });
     expect(fmtHeaderClock(new Date(2026, 8, 18, 9, 7).getTime())).toEqual({ weekday: 'Fri', date: 'Sep 18', time: '9:07AM' });
     expect(fmtHeaderClock(new Date(2026, 8, 18, 12, 0).getTime())).toEqual({ weekday: 'Fri', date: 'Sep 18', time: '12:00PM' });
+  });
+});
+
+describe('neglect marker', () => {
+  it('shifts once at two weeks and once at a month, and never again', () => {
+    expect(neglectMark(0)).toBe(0);
+    expect(neglectMark(13 * D)).toBe(0);
+    expect(neglectMark(14 * D)).toBe(1);
+    expect(neglectMark(29 * D)).toBe(1);
+    expect(neglectMark(30 * D)).toBe(2);
+    expect(neglectMark(400 * D)).toBe(2);
+  });
+});
+
+describe('dates', () => {
+  it('labels a calendar day', () => {
+    expect(fmtDateLabel(new Date(2026, 8, 18, 17, 0).getTime())).toBe('FRI SEP 18');
+  });
+
+  it('counts whole local days between two moments', () => {
+    const noon = new Date(2026, 8, 18, 12, 0).getTime();
+    expect(dayGap(noon, new Date(2026, 8, 18, 23, 0).getTime())).toBe(0);
+    expect(dayGap(noon, new Date(2026, 8, 19, 1, 0).getTime())).toBe(1);
+    expect(dayGap(noon, new Date(2026, 8, 15, 9, 0).getTime())).toBe(-3);
   });
 });

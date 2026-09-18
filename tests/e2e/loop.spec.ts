@@ -29,7 +29,7 @@ test('opens straight into the workspace with no sign-in', async ({ page, request
 });
 
 test.describe('core loop lifecycle (desktop)', () => {
-  test.use({ viewport: { width: 1024, height: 800 } });
+  test.use({ viewport: { width: 700, height: 800 } });
 
   test('create, start, stop, resume, prioritize, inspect, close, reopen, persist', async ({ page }) => {
     await login(page);
@@ -188,7 +188,7 @@ test.describe('new loop pop-up', () => {
 });
 
 test.describe('row opens the details pop-up', () => {
-  for (const width of [1100, 393, 220]) {
+  for (const width of [700, 393, 220]) {
     test(`rename, note, delete and undo from the pop-up at ${width}px`, async ({ page }) => {
       await page.setViewportSize({ width, height: 800 });
       await login(page);
@@ -303,7 +303,7 @@ test.describe('wide windows dock the details', () => {
     await expect(pane.locator('.insp-head__title')).toHaveText(renamed);
 
     // Narrower windows go back to the centered pop-up.
-    await page.setViewportSize({ width: 1024, height: 900 });
+    await page.setViewportSize({ width: 700, height: 900 });
     await expect(page.locator('.app')).toHaveAttribute('data-mode', 'desk');
     await expect(pane).toHaveCount(0);
     await page.locator('[data-row]', { hasText: renamed }).click({ position: { x: 4, y: 4 } });
@@ -314,7 +314,7 @@ test.describe('wide windows dock the details', () => {
 });
 
 test.describe('edit start time', () => {
-  for (const width of [1100, 393, 220]) {
+  for (const width of [700, 393, 220]) {
     test(`backdate a running loop with the calendar at ${width}px, then undo`, async ({ page }) => {
       await page.setViewportSize({ width, height: 900 });
       await login(page);
@@ -363,7 +363,7 @@ test.describe('edit start time', () => {
   }
 
   test('backdating a running loop past earlier sessions merges them instead of blocking', async ({ page }) => {
-    await page.setViewportSize({ width: 1024, height: 900 });
+    await page.setViewportSize({ width: 700, height: 900 });
     await login(page);
     await resetData(page.request);
     const title = `Merge ${Date.now()}`;
@@ -399,7 +399,7 @@ test.describe('edit start time', () => {
   });
 
   test('pick a date and time for when an open loop was opened', async ({ page }) => {
-    await page.setViewportSize({ width: 1024, height: 900 });
+    await page.setViewportSize({ width: 700, height: 900 });
     await login(page);
     await resetData(page.request);
     const title = `Opened earlier ${Date.now()}`;
@@ -438,7 +438,7 @@ test.describe('edit start time', () => {
 });
 
 test.describe('ball in court', () => {
-  for (const width of [1100, 393, 220]) {
+  for (const width of [700, 393, 220]) {
     test(`delegate, follow up, filter and take back at ${width}px`, async ({ page }) => {
       await page.setViewportSize({ width, height: 900 });
       await login(page);
@@ -523,7 +523,7 @@ test.describe('ball in court', () => {
     const row = page.locator('[data-row]', { hasText: title });
     await expect(row).toHaveClass(/is-due/);
     await expect(row.locator('.row__owner')).toContainText('DUE');
-    await expect(page.getByRole('group', { name: 'Filter by who is moving it' })).toContainText('1 DUE');
+    await expect(page.locator('.viewbar').first()).toContainText('1 DUE');
   });
 });
 
@@ -554,7 +554,7 @@ test.describe('header', () => {
 });
 
 test.describe('slow network', () => {
-  test.use({ viewport: { width: 1024, height: 800 } });
+  test.use({ viewport: { width: 700, height: 800 } });
 
   test('rapid actions on one loop are queued, not dropped', async ({ page }) => {
     await login(page);
@@ -636,8 +636,9 @@ const WIDTHS: { width: number; mode: string }[] = [
   { width: 375, mode: 'mobile' },
   { width: 393, mode: 'mobile' },
   { width: 450, mode: 'mobile' },
-  { width: 720, mode: 'desk' },
-  { width: 1024, mode: 'desk' },
+  { width: 700, mode: 'desk' },
+  { width: 720, mode: 'wide' },
+  { width: 1024, mode: 'wide' },
   { width: 1440, mode: 'wide' },
 ];
 
@@ -705,4 +706,94 @@ test.describe('responsive smoke', () => {
       await page.screenshot({ path: `test-results/responsive-${width}.png` });
     });
   }
+});
+
+test.describe('dual timers', () => {
+  test.use({ viewport: { width: 700, height: 800 } });
+  const DAY = 86_400_000;
+
+  test('a deadline counts down, escalates and floats to the top', async ({ page }) => {
+    await login(page);
+    await resetData(page.request);
+    const calm = `Calm ${Date.now()}`;
+    const hot = `Hot ${Date.now()}`;
+    const aging = `Aging ${Date.now()}`;
+    await page.request.post('/api/loops', { headers: H, data: { id: crypto.randomUUID(), title: aging } });
+    await page.request.post('/api/loops', {
+      headers: H,
+      data: { id: crypto.randomUUID(), title: calm, deadlineAt: Date.now() + 9 * DAY },
+    });
+    await page.request.post('/api/loops', {
+      headers: H,
+      data: { id: crypto.randomUUID(), title: hot, deadlineAt: Date.now() + 5 * 3_600_000 },
+    });
+    await page.reload();
+
+    const open = page.getByRole('list', { name: 'Open loops' });
+    await expect(open.locator('[data-row]').first()).toContainText(hot);
+    await expect(open.locator('[data-row]', { hasText: hot })).toHaveAttribute('data-tier', 'urgent');
+    await expect(open.locator('[data-row]', { hasText: calm })).toHaveAttribute('data-tier', 'calm');
+    await expect(open.locator('[data-row]', { hasText: aging })).not.toHaveAttribute('data-tier', /./);
+    // The countdown reads the deadline, not the loop's own age.
+    await expect(open.locator('[data-row]', { hasText: hot }).locator('.dl')).toContainText('DUE');
+
+    // Sub-filters split the two kinds of loop.
+    const timers = page.getByRole('group', { name: 'Filter by timer' });
+    await timers.getByRole('button', { name: /^DEADLINES/ }).click();
+    await expect(open.locator('[data-row]', { hasText: aging })).toHaveCount(0);
+    await expect(open.locator('[data-row]', { hasText: hot })).toBeVisible();
+    await timers.getByRole('button', { name: /^AGING/ }).click();
+    await expect(open.locator('[data-row]', { hasText: hot })).toHaveCount(0);
+    await expect(open.locator('[data-row]', { hasText: aging })).toBeVisible();
+    await timers.getByRole('button', { name: /^ALL/ }).click();
+  });
+
+  test('an ageing loop takes a date in one click; losing one takes two', async ({ page }) => {
+    await login(page);
+    await resetData(page.request);
+    const title = `Converted ${Date.now()}`;
+    await page.request.post('/api/loops', { headers: H, data: { id: crypto.randomUUID(), title } });
+    await page.reload();
+
+    const row = page.locator('[data-row]', { hasText: title });
+    await row.click({ position: { x: 4, y: 4 } });
+    const dialog = page.getByRole('dialog', { name: 'Loop details' });
+    const timer = dialog.getByRole('group', { name: 'Timer' });
+    await expect(timer.getByRole('radio', { name: 'AGING' })).toHaveAttribute('aria-checked', 'true');
+
+    await timer.getByRole('radio', { name: 'DEADLINE' }).click();
+    await timer.getByRole('button', { name: 'NEXT WEEK' }).click();
+    await expect(timer.getByRole('radio', { name: 'DEADLINE' })).toHaveAttribute('aria-checked', 'true');
+    await expect(timer).toContainText('IN 7 DAYS');
+
+    // Asking for the ageing timer only raises the question; the deadline survives it.
+    await timer.getByRole('radio', { name: 'AGING' }).click();
+    await expect(timer).toContainText('THIS DEADLINE NO LONGER APPLIES?');
+    await timer.getByRole('button', { name: 'KEEP' }).click();
+    await expect(timer.getByRole('radio', { name: 'DEADLINE' })).toHaveAttribute('aria-checked', 'true');
+
+    await timer.getByRole('radio', { name: 'AGING' }).click();
+    await timer.getByRole('button', { name: 'DROP IT' }).click();
+    await expect(timer.getByRole('radio', { name: 'AGING' })).toHaveAttribute('aria-checked', 'true');
+    await expect(timer).toContainText('NO DEADLINE');
+    await expect
+      .poll(async () => {
+        const st = await (await page.request.get('/api/state', { headers: H })).json();
+        const l = st.loops.find((x: { title: string }) => x.title === title);
+        return [l.timerType, l.deadlineAt];
+      })
+      .toEqual(['elapsed', null]);
+  });
+
+  test('the server refuses to clear a deadline without switching the timer', async ({ page }) => {
+    await login(page);
+    const id = crypto.randomUUID();
+    await page.request.post('/api/loops', {
+      headers: H,
+      data: { id, title: `Guarded ${Date.now()}`, deadlineAt: Date.now() + 2 * DAY },
+    });
+    const res = await page.request.patch(`/api/loops/${id}`, { headers: H, data: { deadlineAt: null } });
+    expect(res.status()).toBe(409);
+    await page.request.delete(`/api/loops/${id}`, { headers: H });
+  });
 });

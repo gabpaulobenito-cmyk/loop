@@ -7,7 +7,7 @@ import { z } from 'zod';
 import type { Pool } from './db';
 import { HttpError } from './errors';
 import * as loops from './loops';
-import { NOTE_MAX, TITLE_MAX, WITH_MAX, type LoopMutationResponse } from '../shared/types';
+import { DATE_RANGE_MS, NOTE_MAX, TITLE_MAX, WITH_MAX, type LoopMutationResponse } from '../shared/types';
 
 export interface AppOptions {
   pool: Pool;
@@ -28,13 +28,21 @@ const note = z
   .transform(cleanLine)
   .pipe(z.string().max(NOTE_MAX, `Note must be ${NOTE_MAX} characters or fewer`));
 
+// A date within a decade either way: far enough for real deadlines, tight
+// enough to catch a mistyped year or a millisecond/second mix-up.
+const dateMs = z
+  .number()
+  .int()
+  .refine((t) => Math.abs(t - Date.now()) < DATE_RANGE_MS, 'Date is out of range');
+
 const createSchema = z.object({
   id: z.uuid(),
   title,
   note: note.optional().default(''),
   start: z.boolean().optional().default(false),
+  // Present only when the loop has a hard external deadline.
+  deadlineAt: dateMs.nullable().optional(),
 });
-const TEN_YEARS = 10 * 365 * 86_400_000;
 const ownerWith = z
   .string()
   .transform(cleanLine)
@@ -46,12 +54,9 @@ const patchSchema = z
     priority: z.boolean().optional(),
     owner: z.enum(['mine', 'delegated', 'waiting']).optional(),
     ownerWith: ownerWith.optional(),
-    followUpAt: z
-      .number()
-      .int()
-      .refine((t) => Math.abs(t - Date.now()) < TEN_YEARS, 'Follow-up date is out of range')
-      .nullable()
-      .optional(),
+    followUpAt: dateMs.nullable().optional(),
+    timerType: z.enum(['elapsed', 'countdown']).optional(),
+    deadlineAt: dateMs.nullable().optional(),
   })
   .strict()
   .refine((v) => Object.values(v).some((x) => x !== undefined), 'Nothing to update');
@@ -63,6 +68,7 @@ const settingsSchema = z
     archiveRange: z.enum(['7d', 'all']).optional(),
     theme: z.enum(['dark', 'light', 'system']).optional(),
     ownerFilter: z.enum(['all', 'mine', 'out']).optional(),
+    timerFilter: z.enum(['all', 'deadline', 'aging']).optional(),
   })
   .strict();
 const idParam = z.uuid();

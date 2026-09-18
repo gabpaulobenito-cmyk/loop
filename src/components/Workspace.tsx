@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { fmtHM, fmtTimer, pad2 } from '../../shared/format';
-import { elapsedMs, sortClosed, sortOpen, sortRunning } from '../../shared/timer';
+import { elapsedMs, hoistFireTier, isFireTier, sortClosed, sortOpen, sortRunning } from '../../shared/timer';
 import type { Loop, OpenSort, RunSort, ThemePref } from '../../shared/types';
 import { useNow } from '../hooks/useNow';
 import { useStore } from '../hooks/useStore';
@@ -16,6 +16,7 @@ import {
   RUN_SORTS,
   SearchField,
   SortButtons,
+  TIMER_FILTERS,
 } from './Chrome';
 import { Inspector, type InspectorActions } from './Inspector';
 import { LoopRow, type RowActions, type RowVariant } from './LoopRow';
@@ -71,28 +72,36 @@ export function Workspace() {
   const q = query.trim().toLowerCase();
   const { settings } = s;
   const ownerFilter = settings.ownerFilter;
+  const timerFilter = settings.timerFilter;
   const matches = useCallback(
     (l: Loop) =>
       (ownerFilter === 'all' || (ownerFilter === 'mine' ? l.owner === 'mine' : l.owner !== 'mine')) &&
+      (timerFilter === 'all' || (timerFilter === 'deadline' ? l.timerType === 'countdown' : l.timerType === 'elapsed')) &&
       (!q ||
         l.title.toLowerCase().includes(q) ||
         l.note.toLowerCase().includes(q) ||
         l.ownerWith.toLowerCase().includes(q)),
-    [q, ownerFilter],
+    [q, ownerFilter, timerFilter],
   );
 
   const allRunning = s.loops.filter((l) => l.state === 'running');
   const allOpen = s.loops.filter((l) => l.state === 'open');
   const running = sortRunning(allRunning.filter(matches), settings.runSort, now);
-  const open = sortOpen(allOpen.filter(matches), settings.openSort);
+  const open = sortOpen(allOpen.filter(matches), settings.openSort, now);
   const closedAll = sortClosed(s.loops.filter((l) => l.state === 'closed' && matches(l)));
   const closed = q || settings.archiveRange === 'all' ? closedAll : closedAll.filter((l) => (l.closedAt ?? 0) > now - WEEK);
   const prioCount = [...allRunning, ...allOpen].filter((l) => l.priority).length;
   const totalActive = [...allRunning, ...allOpen].reduce((a, l) => a + elapsedMs(l, now), 0);
   const longest = allRunning.reduce((a, l) => Math.max(a, elapsedMs(l, now)), 0);
 
-  // Ball-in-court counts across live (not closed) loops.
+  // Ball-in-court and timer counts across live (not closed) loops.
   const live = [...allRunning, ...allOpen];
+  const timerCounts = {
+    all: live.length,
+    deadline: live.filter((l) => l.timerType === 'countdown').length,
+    aging: live.filter((l) => l.timerType === 'elapsed').length,
+    fire: live.filter((l) => isFireTier(l, now)).length,
+  };
   const outLoops = live.filter((l) => l.owner !== 'mine');
   const ownerCounts = {
     all: live.length,
@@ -110,7 +119,7 @@ export function Workspace() {
   useEffect(() => {
     if (!wide || s.load !== 'ready') return;
     if (selectedId && s.loops.some((l) => l.id === selectedId)) return;
-    const first = sortRunning(allRunning, settings.runSort, now)[0] ?? sortOpen(allOpen, settings.openSort)[0];
+    const first = sortRunning(allRunning, settings.runSort, now)[0] ?? sortOpen(allOpen, settings.openSort, now)[0];
     setSelectedId(first?.id ?? null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [wide, s.load, s.loops, selectedId]);
@@ -143,6 +152,8 @@ export function Workspace() {
       edit: (id, patch) => store.edit(id, patch),
       retime: (id, at, kept) => void store.retime(id, at, kept),
       handoff: (id, patch) => void store.handoff(id, patch),
+      setDeadline: (id, at) => void store.setDeadline(id, at),
+      dropDeadline: (id) => void store.dropDeadline(id),
       remove: (id) => {
         setOverlay(false);
         void store.remove(id);
@@ -347,8 +358,15 @@ export function Workspace() {
       </div>
     );
   } else if (mode === 'mobile') {
+    // On the combined tab a deadline in its last day outranks everything, running or not.
     const list =
-      tab === 'running' ? running : tab === 'open' ? open : tab === 'closed' ? closedAll : [...running, ...open];
+      tab === 'running'
+        ? running
+        : tab === 'open'
+          ? open
+          : tab === 'closed'
+            ? closedAll
+            : hoistFireTier([...running, ...open], now);
     const nothingAtAll = !q && allRunning.length + allOpen.length === 0;
     listContent =
       list.length > 0 ? (
@@ -468,6 +486,15 @@ export function Workspace() {
       )}
       {compact && (
         <>
+          <div className="menu__group">TIMER</div>
+          <div className="menu__opts">
+            <SortButtons
+              label="Filter by timer"
+              options={TIMER_FILTERS}
+              value={settings.timerFilter}
+              onChange={(v) => void store.updateSettings({ timerFilter: v })}
+            />
+          </div>
           <div className="menu__group">SORT RUNNING</div>
           <div className="menu__opts">
             <SortButtons label="Sort running loops" options={RUN_SORTS} value={settings.runSort} onChange={setRunSort} />
@@ -547,26 +574,58 @@ export function Workspace() {
   );
 
   const viewBar = (
-    <div className={`viewbar viewbar--${mode}`} role="group" aria-label="Filter by who is moving it">
-      {mode !== 'rail' && <span className="viewbar__label">VIEW</span>}
-      {(
-        [
-          ['all', 'ALL', ownerCounts.all],
-          ['mine', 'MINE', ownerCounts.mine],
-          ['out', 'OUT', ownerCounts.out],
-        ] as const
-      ).map(([value, label, count]) => (
-        <button
-          key={value}
-          type="button"
-          className="viewbar__opt"
-          aria-pressed={ownerFilter === value}
-          onClick={() => void store.updateSettings({ ownerFilter: value })}
-        >
-          {label} <span className="viewbar__count">{pad2(count)}</span>
-        </button>
-      ))}
+    <div className={`viewbar viewbar--${mode}`} aria-label="Filters">
+      <span className="viewbar__group" role="group" aria-label="Filter by who is moving it">
+        {mode !== 'rail' && <span className="viewbar__label">VIEW</span>}
+        {(
+          [
+            ['all', 'ALL', ownerCounts.all],
+            ['mine', 'MINE', ownerCounts.mine],
+            ['out', 'OUT', ownerCounts.out],
+          ] as const
+        ).map(([value, label, count]) => (
+          <button
+            key={value}
+            type="button"
+            className="viewbar__opt"
+            aria-pressed={ownerFilter === value}
+            onClick={() => void store.updateSettings({ ownerFilter: value })}
+          >
+            {label} <span className="viewbar__count">{pad2(count)}</span>
+          </button>
+        ))}
+      </span>
+      {/* Narrow layouts have no room for a second filter row; it moves into the menu. */}
+      {!compact && (
+        <>
+          <span className="viewbar__div" aria-hidden="true" />
+          <span className="viewbar__group" role="group" aria-label="Filter by timer">
+            {(
+              [
+                ['all', 'ALL', timerCounts.all],
+                ['deadline', 'DEADLINES', timerCounts.deadline],
+                ['aging', 'AGING', timerCounts.aging],
+              ] as const
+            ).map(([value, label, count]) => (
+              <button
+                key={`t-${value}`}
+                type="button"
+                className="viewbar__opt viewbar__opt--timer"
+                aria-pressed={timerFilter === value}
+                onClick={() => void store.updateSettings({ timerFilter: value })}
+              >
+                {label} <span className="viewbar__count">{pad2(count)}</span>
+              </button>
+            ))}
+          </span>
+        </>
+      )}
       <span className="viewbar__spacer" />
+      {timerCounts.fire > 0 && (
+        <span className="viewbar__stat viewbar__stat--fire" title="Due within a day, or overdue">
+          {timerCounts.fire} DUE
+        </span>
+      )}
       {ownerCounts.delegated > 0 && (
         <span className="viewbar__stat" data-owner="delegated" title="Delegated">
           → {ownerCounts.delegated}
@@ -653,8 +712,8 @@ export function Workspace() {
       {captureOpen && (
         <CaptureDialog
           onClose={() => setCaptureOpen(false)}
-          onCreate={async (title, note, start) => {
-            const id = await store.create(title, start, note);
+          onCreate={async (title, note, start, deadlineAt) => {
+            const id = await store.create(title, start, note, deadlineAt);
             if (id && mode === 'mobile' && tab !== 'all' && tab !== (start ? 'running' : 'open')) setTab('all');
           }}
         />

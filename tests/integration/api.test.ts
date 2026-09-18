@@ -526,3 +526,90 @@ describe('state, settings and persistence', () => {
     expect(res.body.serverNow).toBe(clock.now());
   });
 });
+
+describe('deadlines', () => {
+  const D = 24 * H;
+  const conversions = async (id: string) =>
+    (await pool.query('SELECT from_type, to_type FROM loop_timer_changes WHERE loop_id = $1 ORDER BY id', [id])).rows;
+
+  it('ages by default and counts down when given a date', async () => {
+    const soft = await create('Soft work');
+    expect(soft).toMatchObject({ timerType: 'elapsed', deadlineAt: null });
+
+    const due = clock.now() + 13 * D;
+    const res = await post('/api/loops', { id: randomUUID(), title: 'Board deck', deadlineAt: due }).expect(201);
+    expect(res.body.loop).toMatchObject({ timerType: 'countdown', deadlineAt: due });
+  });
+
+  it('rejects a deadline that is out of range', async () => {
+    await post('/api/loops', { id: randomUUID(), title: 'Someday', deadlineAt: clock.now() + 20 * 365 * D }).expect(400);
+    await post('/api/loops', { id: randomUUID(), title: 'Someday', deadlineAt: 'friday' }).expect(400);
+  });
+
+  it('converts an ageing loop the moment it gets a real date', async () => {
+    const l = await create('Vendor contract');
+    const due = clock.now() + 5 * D;
+    const res = await patch(`/api/loops/${l.id}`, { deadlineAt: due }).expect(200);
+    expect(res.body.loop).toMatchObject({ timerType: 'countdown', deadlineAt: due });
+    expect(res.body.undo.label).toMatch(/Set a deadline/);
+    expect(await conversions(l.id)).toEqual([{ from_type: 'elapsed', to_type: 'countdown' }]);
+  });
+
+  it('moves a deadline without logging a conversion', async () => {
+    const l = await create('Filing');
+    await patch(`/api/loops/${l.id}`, { deadlineAt: clock.now() + 2 * D }).expect(200);
+    const res = await patch(`/api/loops/${l.id}`, { deadlineAt: clock.now() + 9 * D }).expect(200);
+    expect(res.body.loop.deadlineAt).toBe(clock.now() + 9 * D);
+    expect(res.body.undo.label).toMatch(/Moved the deadline/);
+    expect(await conversions(l.id)).toHaveLength(1);
+  });
+
+  it('refuses to drop a deadline by clearing the date', async () => {
+    const l = await create('Audit response');
+    await patch(`/api/loops/${l.id}`, { deadlineAt: clock.now() + D }).expect(200);
+    const res = await patch(`/api/loops/${l.id}`, { deadlineAt: null }).expect(409);
+    expect(res.body.error.code).toBe('deadline_locked');
+    expect((await agent.get(`/api/state`)).body.loops.find((x: Loop) => x.id === l.id).deadlineAt).toBe(clock.now() + D);
+  });
+
+  it('drops a deadline only when the timer is switched back on purpose', async () => {
+    const l = await create('Audit response');
+    await patch(`/api/loops/${l.id}`, { deadlineAt: clock.now() + D }).expect(200);
+    const res = await patch(`/api/loops/${l.id}`, { timerType: 'elapsed' }).expect(200);
+    expect(res.body.loop).toMatchObject({ timerType: 'elapsed', deadlineAt: null });
+    expect(res.body.undo.label).toMatch(/Dropped the deadline/);
+    expect(await conversions(l.id)).toEqual([
+      { from_type: 'elapsed', to_type: 'countdown' },
+      { from_type: 'countdown', to_type: 'elapsed' },
+    ]);
+  });
+
+  it('rejects a countdown with no date, and a date with no countdown', async () => {
+    const l = await create('Nothing due');
+    expect((await patch(`/api/loops/${l.id}`, { timerType: 'countdown' }).expect(400)).body.error.code).toBe('deadline_required');
+    await patch(`/api/loops/${l.id}`, { timerType: 'elapsed', deadlineAt: clock.now() + D }).expect(400);
+  });
+
+  it('undoes a conversion completely, log and all', async () => {
+    const l = await create('Grant application');
+    await patch(`/api/loops/${l.id}`, { deadlineAt: clock.now() + 4 * D }).expect(200);
+    const res = await post('/api/undo').expect(200);
+    expect(res.body.loop).toMatchObject({ timerType: 'elapsed', deadlineAt: null });
+    expect(await conversions(l.id)).toEqual([]);
+  });
+
+  it('keeps the deadline on a loop that is closed and reopened', async () => {
+    const l = await create('Tax filing');
+    const due = clock.now() + 3 * D;
+    await patch(`/api/loops/${l.id}`, { deadlineAt: due }).expect(200);
+    await post(`/api/loops/${l.id}/close`).expect(200);
+    const res = await post(`/api/loops/${l.id}/reopen`).expect(200);
+    expect(res.body.loop).toMatchObject({ timerType: 'countdown', deadlineAt: due });
+  });
+
+  it('stores the timer filter with the other view settings', async () => {
+    const res = await agent.put('/api/settings').set('x-loop-client', '1').send({ timerFilter: 'deadline' }).expect(200);
+    expect(res.body.settings.timerFilter).toBe('deadline');
+    await agent.put('/api/settings').set('x-loop-client', '1').send({ timerFilter: 'someday' }).expect(400);
+  });
+});

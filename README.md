@@ -4,7 +4,7 @@ A lightweight personal **open-loops** tracker. It answers one question:
 
 > What have I started but not closed?
 
-Every loop is **RUNNING** (a session is accumulating time), **OPEN** (unresolved, timer stopped) or **CLOSED** (done, out of the workspace). There are no projects, boards, subtasks or due dates.
+Every loop is **RUNNING** (a session is accumulating time), **OPEN** (unresolved, timer stopped) or **CLOSED** (done, out of the workspace). There are no projects, boards or subtasks. A loop that someone is actually owed by a date carries one deadline and counts down to it; everything else simply ages.
 
 The interface is a production translation of the *Loop V2* design studies: a dark command-center UI with Geist / Geist Mono / Saira Condensed, acid-lime running states, neon-red priority markers, and tight technical rows that adapt from a 180 px persistent rail up to a full desktop. Pop-ups use a terminal style with square corners.
 
@@ -53,13 +53,36 @@ That formula lives in `shared/timer.ts` and is used by the server, the client an
 Invariants enforced in the database:
 
 - `state = 'running'` ⇔ `running_since IS NOT NULL`, and `state = 'closed'` ⇔ `closed_at IS NOT NULL` (CHECK constraints)
+- `timer_type = 'countdown'` ⇔ `deadline_at IS NOT NULL` (CHECK constraint)
 - at most one open session per loop (partial unique index)
 
 Every state change runs in a transaction holding a row lock (`SELECT … FOR UPDATE`), so simultaneous start/stop requests from double taps or multiple devices serialize safely. Start and stop are idempotent. Loop creation uses a client-generated UUID, so a duplicate submission returns the existing loop instead of creating a second one. Closing a running loop finalizes its session first.
 
+## Two timers: aging and countdown
+
+Every loop reads exactly one clock, chosen when it is created and editable later (`timer_type`, `deadline_at`).
+
+**Aging** is the default. It counts up from when the loop was opened — `1MO · 3D · 13:15:30` — and stays visually muted however long it runs. Its job is visibility into neglect, not pressure, so it never turns red and it never reorders itself: an aging loop stays exactly where your sort puts it. The only concession to scanning is the status dot, which shifts once at two weeks and once at a month.
+
+**Countdown** is opt-in and needs a real external deadline. It counts down — `13D · 08:12:35` — and escalates as the date approaches:
+
+| Time left | Look |
+| --------- | ---- |
+| More than 7 days | Neutral |
+| 3–7 days | Amber |
+| Under 3 days | Orange |
+| Under 24 hours | Red, and floats to the top of its list regardless of sort |
+| Past the deadline | Counts *up* since the deadline in red, pinned above everything (`OVER 2D · 03:11:09`) |
+
+Those last two — the **fire tier** — are the only thing in LOOP that overrides the sort you chose. On mobile's combined tab they outrank running loops too.
+
+Conversion is deliberately asymmetric. Giving an aging loop a date converts it in one click, because soft work really does acquire real dates. Letting a deadline go does not: the details pop-up asks *THIS DEADLINE NO LONGER APPLIES?* and the API refuses `deadlineAt: null` outright (`409 deadline_locked`) — the only way to drop one is to ask for the aging timer by name. Every conversion is appended to `loop_timer_changes`, so the question *how often do soft loops quietly turn into deadline loops?* is answerable later. Undoing a conversion removes its log row too.
+
+The **VIEW** bar filters ALL / DEADLINES / AGING alongside the ball-in-court filter (in the ⋯ menu on narrow layouts), and shows a red count of everything in the fire tier.
+
 ## Undo
 
-Reversible actions (create, start/resume, stop, close, reopen, priority, rename, note edits) go into `action_history` with a snapshot of the loop and the session they created or finished. `POST /api/undo` reverts the most recent action from the last 30 minutes, including reopening a finished session or deleting a just-started one. The undo stack is server-side, so it is consistent across devices.
+Reversible actions (create, start/resume, stop, close, reopen, priority, rename, note edits, deadline changes) go into `action_history` with a snapshot of the loop and the session they created or finished. `POST /api/undo` reverts the most recent action from the last 30 minutes, including reopening a finished session or deleting a just-started one. The undo stack is server-side, so it is consistent across devices.
 
 ## Interaction model
 
@@ -67,8 +90,8 @@ Reversible actions (create, start/resume, stop, close, reopen, priority, rename,
 | ----- | ------ |
 | Row | Opens the loop's details pop-up. Never changes its state. |
 | ▶ / ■ / ↺ button | Start, stop, or reopen. This is the only way a row changes state. |
-| + / NEW LOOP / `N` | New-loop pop-up: large title and note. `⏎` creates and starts, `⇧⏎` adds without starting. |
-| Details pop-up | Start/stop, **CLOSE LOOP**, PRIORITY, RENAME, NOTE, **EDIT START**, DELETE (two clicks), full session history |
+| + / NEW LOOP / `N` | New-loop pop-up: large title, note, and *does this have a hard external deadline?* `⏎` creates and starts, `⇧⏎` adds without starting. |
+| Details pop-up | Start/stop, **CLOSE LOOP**, PRIORITY, RENAME, NOTE, **EDIT START**, DELETE (two clicks), the **TIMER** panel, full session history |
 | EDIT START | Calendar + time picker. On a running loop it moves the current session's start (the timer counts from then). On an open or closed loop it moves when the loop was opened. Moving a running start back past earlier sessions merges them into the running one, cutting any session that straddles the new start, so time is never double-counted. It can't be set in the future, and it can be undone, which restores the original sessions. |
 
 ### Ball in court: Mine · Delegated · Waiting

@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { fmtAge, fmtClock, fmtDay, fmtDuration, fmtHM, pad2 } from '../../shared/format';
-import { currentSessionMs, elapsedMs } from '../../shared/timer';
+import { currentSessionMs, deadlineTier, elapsedMs } from '../../shared/timer';
 import type { Loop, Session } from '../../shared/types';
 import { api } from '../lib/api';
+import { Countdown } from './Countdown';
+import { DeadlinePanel } from './DeadlinePanel';
 import { Marker } from './Marker';
 import { StartEditor } from './StartEditor';
 import { OwnerPanel, type HandoffPatch } from './OwnerPanel';
@@ -18,6 +20,8 @@ export interface InspectorActions {
   remove: (id: string) => void;
   retime: (id: string, startedAt: number, predictedAccumulatedMs?: number) => void;
   handoff: (id: string, patch: HandoffPatch) => void;
+  setDeadline: (id: string, deadlineAt: number) => void;
+  dropDeadline: (id: string) => void;
 }
 
 interface Props {
@@ -170,6 +174,7 @@ export function Inspector({ loop, now, docked = false, pending, keysEnabled, onD
   const running = loop.state === 'running';
   const closed = loop.state === 'closed';
   const total = elapsedMs(loop, now);
+  const tier = deadlineTier(loop, now);
 
   const list = (sessions?.sessions ?? []).map((s) => {
     const live = s.endedAt == null;
@@ -180,11 +185,14 @@ export function Inspector({ loop, now, docked = false, pending, keysEnabled, onD
   const thisWeek = list.filter((s) => s.startedAt > now - WEEK).length;
   const count = sessions ? list.length : loop.sessionCount;
 
+  // A loop reads one clock: a countdown shows what's left, an ageing loop its age.
   const stats = [
     { label: 'ACTIVE TIME', value: fmtHM(total), cls: '' },
     closed
       ? { label: 'CLOSED', value: `${fmtAge(now - (loop.closedAt ?? now))} ago`, cls: '' }
-      : { label: 'OPEN FOR', value: fmtAge(now - loop.createdAt), cls: '' },
+      : tier !== 'none'
+        ? { label: 'DEADLINE', value: <Countdown loop={loop} now={now} />, cls: '' }
+        : { label: 'OPEN FOR', value: fmtAge(now - loop.createdAt), cls: '' },
     {
       label: 'CURRENT SESSION',
       value: running ? <TimerText ms={currentSessionMs(loop, now)} /> : '—',
@@ -241,11 +249,17 @@ export function Inspector({ loop, now, docked = false, pending, keysEnabled, onD
   return (
     <section ref={rootRef} className="inspector" aria-label={`Details: ${loop.title}`} aria-busy={pending || undefined} data-inspector={loop.id}>
       <div className="term-bar">
-        <Marker loop={loop} />
+        <Marker loop={loop} tier={tier} />
         <span className="term-bar__path">
           <span className="term-bar__prefix">LOOP // </span>
           <span className={`term-bar__state term-bar__state--${loop.state}`}>{loop.state.toUpperCase()}</span>
           {loop.priority && <span className="term-bar__prio"> · PRIORITY</span>}
+          {tier !== 'none' && (
+            <span className="term-bar__dl" data-tier={tier}>
+              {' · '}
+              {tier === 'overdue' ? 'OVERDUE' : 'DEADLINE'}
+            </span>
+          )}
           {loop.owner !== 'mine' && (
             <span className="term-bar__owner" data-owner={loop.owner}>
               {' · '}
@@ -345,6 +359,13 @@ export function Inspector({ loop, now, docked = false, pending, keysEnabled, onD
         </div>
       ) : (
         <>
+          <DeadlinePanel
+            loop={loop}
+            now={now}
+            onSet={(at) => actions.setDeadline(loop.id, at)}
+            onDrop={() => actions.dropDeadline(loop.id)}
+          />
+
           <OwnerPanel loop={loop} now={now} onChange={(patch) => actions.handoff(loop.id, patch)} />
 
       <div className="insp-stats">

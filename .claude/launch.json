@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "loop",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": ["-c", "PORT=3020 node --env-file=.env dist/server/index.js"],
+      "port": 3020
+    }
+  ]
+}

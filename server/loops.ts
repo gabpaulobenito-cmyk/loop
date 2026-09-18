@@ -11,10 +11,12 @@ import {
   type Owner,
   type Session,
   type Settings,
+  type TimerType,
   type UndoTop,
 } from '../shared/types';
 
-type ActionKind = 'create' | 'start' | 'stop' | 'close' | 'reopen' | 'priority' | 'edit' | 'delete' | 'retime' | 'handoff';
+type ActionKind =
+  | 'create' | 'start' | 'stop' | 'close' | 'reopen' | 'priority' | 'edit' | 'delete' | 'retime' | 'handoff' | 'deadline';
 
 interface LoopRow {
   id: string;
@@ -33,6 +35,8 @@ interface LoopRow {
   owner_with: string;
   handed_off_at: Date | null;
   follow_up_at: Date | null;
+  timer_type: TimerType;
+  deadline_at: Date | null;
   session_count?: number;
 }
 
@@ -53,6 +57,9 @@ interface Snapshot {
   ownerWith?: string;
   handedOffAt?: number | null;
   followUpAt?: number | null;
+  /** Present on snapshots taken after the countdown timer was added. */
+  timerType?: TimerType;
+  deadlineAt?: number | null;
   /** Original start of a session moved by a retime action. */
   sessionStart?: { id: string; startedAt: number };
   /** Earlier sessions a backdated running session absorbed (restored on undo). */
@@ -83,6 +90,8 @@ function toLoop(r: LoopRow): Loop {
     ownerWith: r.owner_with,
     handedOffAt: ms(r.handed_off_at),
     followUpAt: ms(r.follow_up_at),
+    timerType: r.timer_type,
+    deadlineAt: ms(r.deadline_at),
   };
 }
 
@@ -101,6 +110,8 @@ function snapshot(r: LoopRow): Snapshot {
     ownerWith: r.owner_with,
     handedOffAt: ms(r.handed_off_at),
     followUpAt: ms(r.follow_up_at),
+    timerType: r.timer_type,
+    deadlineAt: ms(r.deadline_at),
   };
 }
 
@@ -230,16 +241,19 @@ async function openSession(c: Client, loopId: string, now: number): Promise<stri
 
 export async function createLoop(
   pool: Pool,
-  input: { id: string; title: string; note: string; start: boolean },
+  input: { id: string; title: string; note: string; start: boolean; deadlineAt?: number | null },
   now: number,
 ): Promise<MutationResult> {
   return withTx(pool, async (c) => {
     const state: LoopState = input.start ? 'running' : 'open';
+    // A deadline at creation is what makes a loop a countdown; without one it ages.
+    const deadlineAt = input.deadlineAt ?? null;
+    const timerType: TimerType = deadlineAt == null ? 'elapsed' : 'countdown';
     const inserted = await c.query(
-      `INSERT INTO loops (id, title, note, state, created_at, running_since, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $5)
+      `INSERT INTO loops (id, title, note, state, created_at, running_since, updated_at, timer_type, deadline_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $5, $7, $8)
        ON CONFLICT (id) DO NOTHING`,
-      [input.id, input.title, input.note, state, new Date(now), input.start ? new Date(now) : null],
+      [input.id, input.title, input.note, state, new Date(now), input.start ? new Date(now) : null, timerType, at(deadlineAt)],
     );
     // Same client id submitted twice: return the existing loop, no duplicate.
     if (!inserted.rowCount) {
@@ -320,6 +334,41 @@ export interface LoopPatch {
   owner?: Owner;
   ownerWith?: string;
   followUpAt?: number | null;
+  timerType?: TimerType;
+  deadlineAt?: number | null;
+}
+
+/**
+ * Resolve the timer half of a patch.
+ * Giving a date to an aging loop converts it — that's the easy direction, since
+ * soft work really does acquire real dates. Letting go of a deadline is not:
+ * it has to be said outright, by asking for the elapsed timer, so a stray tap
+ * on a date field can never quietly drop a real commitment.
+ */
+function resolveTimer(row: LoopRow, patch: LoopPatch): { timerType: TimerType; deadlineAt: number | null } {
+  const current = ms(row.deadline_at);
+  const wantType: TimerType = patch.timerType ?? (patch.deadlineAt != null ? 'countdown' : row.timer_type);
+
+  if (wantType === 'elapsed') {
+    if (patch.deadlineAt != null) {
+      throw new HttpError(400, 'invalid_request', 'A deadline needs the countdown timer');
+    }
+    return { timerType: 'elapsed', deadlineAt: null };
+  }
+  if (patch.deadlineAt === null) {
+    throw new HttpError(409, 'deadline_locked', 'Switch this loop back to the aging timer to drop its deadline');
+  }
+  const deadlineAt = patch.deadlineAt ?? current;
+  if (deadlineAt == null) throw new HttpError(400, 'deadline_required', 'A countdown needs a deadline date');
+  return { timerType: 'countdown', deadlineAt };
+}
+
+/** Append-only conversion record, kept for later pattern analysis. */
+async function logTimerChange(c: Client, loopId: string, from: TimerType, to: TimerType, deadlineAt: number | null, now: number) {
+  await c.query(
+    `INSERT INTO loop_timer_changes (loop_id, from_type, to_type, deadline_at, changed_at) VALUES ($1, $2, $3, $4, $5)`,
+    [loopId, from, to, at(deadlineAt), new Date(now)],
+  );
 }
 
 export function updateLoop(pool: Pool, id: string, patch: LoopPatch, now: number) {
@@ -335,21 +384,37 @@ export function updateLoop(pool: Pool, id: string, patch: LoopPatch, now: number
     const handedOffAt = mine ? null : row.owner === 'mine' ? now : row.handed_off_at!.getTime();
     const followUpAt = mine ? null : patch.followUpAt !== undefined ? patch.followUpAt : ms(row.follow_up_at);
 
+    // Which clock it reads, and the date behind it.
+    const { timerType, deadlineAt } = resolveTimer(row, patch);
+
     const priorityChanged = priority !== row.priority;
     const textChanged = title !== row.title || note !== row.note;
     const ownerChanged = owner !== row.owner;
     const withChanged = ownerWith !== row.owner_with;
     const followChanged = followUpAt !== ms(row.follow_up_at);
     const handoffChanged = ownerChanged || withChanged || followChanged;
-    if (!priorityChanged && !textChanged && !handoffChanged) return null;
+    const typeChanged = timerType !== row.timer_type;
+    const deadlineChanged = deadlineAt !== ms(row.deadline_at);
+    const timerChanged = typeChanged || deadlineChanged;
+    if (!priorityChanged && !textChanged && !handoffChanged && !timerChanged) return null;
 
     await c.query(
       `UPDATE loops SET title = $2, note = $3, priority = $4, owner = $5, owner_with = $6, handed_off_at = $7,
-         follow_up_at = $8, version = version + 1, updated_at = $9 WHERE id = $1`,
-      [id, title, note, priority, owner, ownerWith, at(handedOffAt), at(followUpAt), new Date(now)],
+         follow_up_at = $8, timer_type = $10, deadline_at = $11, version = version + 1, updated_at = $9 WHERE id = $1`,
+      [id, title, note, priority, owner, ownerWith, at(handedOffAt), at(followUpAt), new Date(now), timerType, at(deadlineAt)],
     );
+    if (typeChanged) await logTimerChange(c, id, row.timer_type, timerType, deadlineAt, now);
 
-    if (handoffChanged && !priorityChanged && !textChanged) {
+    if (timerChanged && !priorityChanged && !textChanged && !handoffChanged) {
+      const label = typeChanged
+        ? timerType === 'countdown'
+          ? `Set a deadline on ${quote(title)}`
+          : `Dropped the deadline on ${quote(title)}`
+        : `Moved the deadline on ${quote(title)}`;
+      return { kind: 'deadline', label };
+    }
+
+    if (handoffChanged && !priorityChanged && !textChanged && !timerChanged) {
       const who = ownerWith ? ` ${ownerWith}` : '';
       let label: string;
       if (ownerChanged && owner === 'mine') label = `Took back ${quote(title)}`;
@@ -359,11 +424,11 @@ export function updateLoop(pool: Pool, id: string, patch: LoopPatch, now: number
       else label = `${followUpAt == null ? 'Cleared follow-up on' : 'Set follow-up on'} ${quote(title)}`;
       return { kind: 'handoff', label };
     }
-    if (priorityChanged && !textChanged && !handoffChanged) {
+    if (priorityChanged && !textChanged && !handoffChanged && !timerChanged) {
       return { kind: 'priority', label: `${priority ? 'Flagged' : 'Cleared priority on'} ${quote(title)}` };
     }
     const what =
-      handoffChanged || priorityChanged || (title !== row.title && note !== row.note)
+      handoffChanged || priorityChanged || timerChanged || (title !== row.title && note !== row.note)
         ? 'Edited'
         : title !== row.title
           ? 'Renamed'
@@ -536,6 +601,20 @@ export async function undoLast(pool: Pool, now: number): Promise<MutationResult>
         'UPDATE loops SET owner = $2, owner_with = $3, handed_off_at = $4, follow_up_at = $5 WHERE id = $1',
         [h.loop_id, b.owner, b.ownerWith ?? '', at(b.handedOffAt ?? null), at(b.followUpAt ?? null)],
       );
+    }
+    if (b.timerType !== undefined) {
+      await c.query('UPDATE loops SET timer_type = $2, deadline_at = $3 WHERE id = $1', [
+        h.loop_id,
+        b.timerType,
+        at(b.deadlineAt ?? null),
+      ]);
+      // An undone conversion never happened, so it leaves no trace in the log.
+      if (b.timerType !== row.timer_type) {
+        await c.query(
+          'DELETE FROM loop_timer_changes WHERE id = (SELECT max(id) FROM loop_timer_changes WHERE loop_id = $1)',
+          [h.loop_id],
+        );
+      }
     }
     if (h.session_started_id) {
       await c.query('DELETE FROM loop_sessions WHERE id = $1', [h.session_started_id]);

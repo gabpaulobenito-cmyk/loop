@@ -56,6 +56,8 @@ function normalizeLoop(l: Loop): Loop {
     ownerWith: l.ownerWith ?? '',
     handedOffAt: l.handedOffAt ?? null,
     followUpAt: l.followUpAt ?? null,
+    timerType: l.timerType ?? 'elapsed',
+    deadlineAt: l.deadlineAt ?? null,
   };
 }
 const DOUBLE_TAP_MS = 350;
@@ -299,7 +301,7 @@ export class LoopStore {
   }
 
   /** Create a loop. `text` may contain "Title // context note". */
-  async create(text: string, start: boolean, note = ''): Promise<string | null> {
+  async create(text: string, start: boolean, note = '', deadlineAt: number | null = null): Promise<string | null> {
     let title = text;
     let ctx = note;
     const split = text.indexOf('//');
@@ -329,6 +331,8 @@ export class LoopStore {
       ownerWith: '',
       handedOffAt: null,
       followUpAt: null,
+      timerType: deadlineAt == null ? 'elapsed' : 'countdown',
+      deadlineAt,
     };
     this.set({ loops: [optimistic, ...this.state.loops] });
     const q = this.queueFor(id);
@@ -336,7 +340,7 @@ export class LoopStore {
     const ok = await this.mutate(
       id,
       (l) => l,
-      () => api<LoopMutationResponse>('/loops', { method: 'POST', body: { id, title, note: ctx, start } }),
+      () => api<LoopMutationResponse>('/loops', { method: 'POST', body: { id, title, note: ctx, start, deadlineAt } }),
       'create loop',
     );
     if (!ok && !this.state.pending[id]) {
@@ -462,6 +466,33 @@ export class LoopStore {
       },
       () => api<LoopMutationResponse>(`/loops/${id}`, { method: 'PATCH', body }),
       'update who has it',
+    );
+  }
+
+  /**
+   * Give a loop a hard deadline, or move the one it has. An aging loop becomes
+   * a countdown here — the easy direction, because soft work does acquire real dates.
+   */
+  setDeadline(id: string, deadlineAt: number) {
+    return this.mutate(
+      id,
+      (l) => ({ ...l, timerType: 'countdown', deadlineAt }),
+      () => api<LoopMutationResponse>(`/loops/${id}`, { method: 'PATCH', body: { deadlineAt } }),
+      'set the deadline',
+    );
+  }
+
+  /**
+   * Drop a deadline: this date no longer applies, so the loop goes back to
+   * ageing. Deliberately its own call — the server refuses to clear a deadline
+   * any other way.
+   */
+  dropDeadline(id: string) {
+    return this.mutate(
+      id,
+      (l) => ({ ...l, timerType: 'elapsed', deadlineAt: null }),
+      () => api<LoopMutationResponse>(`/loops/${id}`, { method: 'PATCH', body: { timerType: 'elapsed' } }),
+      'drop the deadline',
     );
   }
 

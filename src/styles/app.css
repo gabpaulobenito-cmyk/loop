@@ -51,6 +51,13 @@
   --delegated: #3dd6f5;
   --waiting: #ffb020;
 
+  /* Deadline escalation — calm is deliberately neutral, not green-for-go */
+  --dl-calm: #a8a8a8;
+  --dl-soon: #ffb020;
+  --dl-near: #ff8a3d;
+  --dl-urgent: #ff3b47;
+  --dl-line: rgba(255, 59, 71, 0.5);
+
   --age0-name: #999999; --age0-age: #a0a0a0; --age0-w: 400;
   --age1-name: #b3b3b3; --age1-age: #b3b3b3; --age1-w: 400;
   --age2-name: #c9c5be; --age2-age: #c9c5be; --age2-w: 500;
@@ -99,6 +106,12 @@
 
   --delegated: #0a7ea8;
   --waiting: #a86400;
+
+  --dl-calm: #6a6a72;
+  --dl-soon: #a86400;
+  --dl-near: #b84a00;
+  --dl-urgent: #e01b24;
+  --dl-line: rgba(224, 27, 36, 0.4);
 
   --age0-name: #6a6a72; --age0-age: #6a6a72; --age0-w: 400;
   --age1-name: #56565e; --age1-age: #6a6a72; --age1-w: 400;
@@ -1162,7 +1175,8 @@ ul {
 /* Wide windows dock the details beside the list as a second column. */
 .insp-pane {
   flex: none;
-  width: clamp(380px, 32vw, 520px);
+  /* Narrow windows split too, so the column has to give the list room first. */
+  width: clamp(296px, 34vw, 520px);
   border-left: 1px solid var(--line);
   display: flex;
   min-height: 0;
@@ -1587,6 +1601,168 @@ ul {
 }
 
 .boot { height: 100%; display: grid; place-items: center; font: 500 10px/1 var(--f-mono); letter-spacing: 0.12em; color: var(--muted-3); }
+
+/* ── Countdown timers ───────────────────────────────────────────────────── */
+
+/* One clock per loop: a countdown reads its deadline where an ageing loop
+   reads its own age. Colour carries the urgency — flat, never a glow. */
+.dl {
+  flex: none;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  font: 500 13px/1 var(--f-mono);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  color: var(--dl);
+}
+.dl[data-tier='calm'] { --dl: var(--dl-calm); }
+.dl[data-tier='soon'] { --dl: var(--dl-soon); }
+.dl[data-tier='near'] { --dl: var(--dl-near); }
+.dl[data-tier='urgent'] { --dl: var(--dl-urgent); font-weight: 700; }
+.dl[data-tier='overdue'] { --dl: var(--dl-urgent); font-weight: 700; }
+.dl__label { font-size: 9px; letter-spacing: 0.1em; opacity: 0.75; }
+.dl[data-tier='urgent'] .dl__label,
+.dl[data-tier='overdue'] .dl__label { opacity: 1; }
+
+.row__dl { padding: 4px 0; }
+.row--desk .row__dl { min-width: 104px; justify-content: flex-end; font-size: 14px; }
+.row--rail .row__dl { font-size: 11px; gap: 4px; }
+.row--rail .row__dl .dl__label { display: none; }
+.row--mobile .row__dl { font-size: 12.5px; }
+
+/* The fire tier — inside a day, or already missed — marks its whole row. */
+.row[data-tier='urgent'],
+.row[data-tier='overdue'] { box-shadow: inset 2px 0 0 var(--dl-urgent); }
+.row[data-tier='overdue'] { border-bottom-color: var(--dl-line); }
+.row[data-tier='urgent'] .row__title,
+.row[data-tier='overdue'] .row__title { color: var(--text-hi); font-weight: 600; }
+
+/* Markers: deadline tier on an open countdown, neglect steps on an ageing one. */
+.marker--open[data-tier='calm'] { border-color: var(--dl-calm); }
+.marker--open[data-tier='soon'] { border-color: var(--dl-soon); background: var(--dl-soon); }
+.marker--open[data-tier='near'] { border-color: var(--dl-near); background: var(--dl-near); }
+.marker--open[data-tier='urgent'],
+.marker--open[data-tier='overdue'] { border-color: var(--dl-urgent); background: var(--dl-urgent); }
+.marker--open[data-mark='1'] { border-color: var(--age2-name); }
+.marker--open[data-mark='2'] { border-color: var(--age4-name); background: var(--age1-name); }
+
+.term-bar__dl { color: var(--dl-calm); font-weight: 600; }
+.term-bar__dl[data-tier='soon'] { color: var(--dl-soon); }
+.term-bar__dl[data-tier='near'] { color: var(--dl-near); }
+.term-bar__dl[data-tier='urgent'],
+.term-bar__dl[data-tier='overdue'] { color: var(--dl-urgent); }
+
+/* ── Timer panel (inspector) ────────────────────────────────────────────── */
+
+.dlp { padding: 12px 16px 14px; border-bottom: 1px solid var(--line); }
+.dlp[data-tier='soon'] { --dlp: var(--dl-soon); box-shadow: inset 2px 0 0 var(--dl-soon); }
+.dlp[data-tier='near'] { --dlp: var(--dl-near); box-shadow: inset 2px 0 0 var(--dl-near); }
+.dlp[data-tier='urgent'],
+.dlp[data-tier='overdue'] { --dlp: var(--dl-urgent); box-shadow: inset 2px 0 0 var(--dl-urgent); }
+.dlp__head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
+.dlp__label { font: 500 10px/1 var(--f-mono); letter-spacing: 0.1em; color: var(--muted-3); white-space: nowrap; }
+.dlp__label--inline { flex: none; width: 76px; }
+.dlp__seg { display: flex; gap: 1px; background: var(--line); border: 1px solid var(--line); }
+.dlp__opt {
+  flex: 1 1 0;
+  height: 32px;
+  padding: 0 6px;
+  background: var(--section);
+  font: 500 10px/1 var(--f-mono);
+  letter-spacing: 0.08em;
+  color: var(--muted-2);
+  white-space: nowrap;
+  border-radius: 0;
+}
+.dlp__opt:hover { background: var(--hover); color: var(--text-hi); }
+.dlp__opt[aria-checked='true'] { background: var(--hover); color: var(--text-hi); font-weight: 600; box-shadow: inset 0 -2px 0 var(--text-hi); }
+.dlp__opt[data-type='countdown'][aria-checked='true'] { color: var(--dlp, var(--dl-calm)); box-shadow: inset 0 -2px 0 var(--dlp, var(--dl-calm)); }
+.dlp__row { display: flex; align-items: center; gap: 10px; margin-top: 12px; min-width: 0; }
+.dlp__status { font: 500 11px/1.3 var(--f-mono); letter-spacing: 0.04em; color: var(--text-2); }
+.dlp__status.is-hot { color: var(--dl-urgent); font-weight: 700; }
+.dlp__confirm {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--dl-urgent);
+}
+.dlp__confirmtext { flex: 1; min-width: 140px; font: 600 10px/1.3 var(--f-mono); letter-spacing: 0.06em; color: var(--text-hi); }
+.dlp__chips { display: flex; flex-wrap: wrap; gap: 1px; margin-top: 8px; margin-left: 86px; background: var(--line); border: 1px solid var(--line); }
+.dlp__chip {
+  flex: 1 1 auto;
+  height: 28px;
+  padding: 0 8px;
+  background: var(--section);
+  border: 0;
+  font: 500 9.5px/1 var(--f-mono);
+  letter-spacing: 0.08em;
+  color: var(--muted-2);
+  white-space: nowrap;
+  border-radius: 0;
+}
+.dlp__chip:hover { background: var(--hover); color: var(--text-hi); }
+.dlp__chip--danger { color: var(--dl-urgent); font-weight: 700; }
+.dlp__confirm .dlp__chip { flex: 0 0 auto; border: 1px solid var(--line-ctl); }
+.dlp__date { color-scheme: dark; min-width: 118px; color: var(--text-2); outline: none; }
+:root[data-theme='light'] .dlp__date { color-scheme: light; }
+.dlp__date:focus { box-shadow: inset 0 0 0 1px var(--dlp, var(--line-ctl-hover)); }
+@container inspector (max-width: 420px) {
+  .dlp__label--inline { width: auto; }
+  .dlp__chips { margin-left: 0; }
+}
+@container inspector (max-width: 300px) {
+  .dlp { padding: 10px 10px 12px; }
+  .dlp__opt { font-size: 9px; letter-spacing: 0.04em; padding: 0 2px; }
+  .dlp__row { flex-wrap: wrap; gap: 4px 8px; }
+}
+
+/* ── Deadline question (new loop) ───────────────────────────────────────── */
+
+.capture__deadline { display: flex; flex-direction: column; gap: 8px; }
+.capture__seg { display: flex; gap: 1px; background: var(--line); border: 1px solid var(--line); }
+.capture__opt {
+  flex: 1 1 0;
+  height: 34px;
+  background: var(--field);
+  font: 500 10px/1 var(--f-mono);
+  letter-spacing: 0.08em;
+  color: var(--muted-2);
+  white-space: nowrap;
+  border-radius: 0;
+}
+.capture__opt:hover { background: var(--hover); color: var(--text-hi); }
+.capture__opt[aria-checked='true'] { background: var(--hover); color: var(--text-hi); font-weight: 600; box-shadow: inset 0 -2px 0 var(--text-hi); }
+.capture__opt[data-yes='true'][aria-checked='true'] { color: var(--dl-near); box-shadow: inset 0 -2px 0 var(--dl-near); }
+.capture__chips { display: flex; flex-wrap: wrap; gap: 1px; background: var(--line); border: 1px solid var(--line); }
+.capture__chip {
+  flex: 1 1 auto;
+  height: 30px;
+  padding: 0 8px;
+  background: var(--field);
+  border: 0;
+  font: 500 9.5px/1 var(--f-mono);
+  letter-spacing: 0.08em;
+  color: var(--muted-2);
+  white-space: nowrap;
+  border-radius: 0;
+}
+.capture__chip:hover { background: var(--hover); color: var(--text-hi); }
+.capture__date { color-scheme: dark; min-width: 122px; color: var(--text-2); outline: none; }
+:root[data-theme='light'] .capture__date { color-scheme: light; }
+.capture__due { font: 500 10px/1 var(--f-mono); letter-spacing: 0.06em; color: var(--muted-2); }
+.capture__due.is-missing { color: var(--dl-near); font-weight: 700; }
+
+/* ── View bar: timer filter ─────────────────────────────────────────────── */
+
+.viewbar__group { display: contents; }
+.viewbar__div { flex: none; width: 1px; height: 14px; margin: 0 8px; background: var(--line-ctl); }
+.viewbar__stat--fire { color: var(--dl-urgent); border: 1px solid var(--dl-urgent); padding: 3px 6px; }
+.viewbar--rail .viewbar__stat--fire { padding: 2px 4px; }
 
 /* ── Motion preferences ─────────────────────────────────────────────────── */
 

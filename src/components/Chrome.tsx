@@ -1,5 +1,5 @@
 import { forwardRef, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, type RefObject } from 'react';
-import { fmtHeaderClock, pad2 } from '../../shared/format';
+import { fmtDateLabel, fmtHeaderClock, pad2 } from '../../shared/format';
 import type { Mode } from '../hooks/useViewport';
 
 const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
@@ -222,8 +222,18 @@ export function CaptureBar({ inputRef, onCreate }: CaptureBarProps) {
 
 interface CaptureDialogProps {
   onClose: () => void;
-  onCreate: (title: string, note: string, start: boolean) => Promise<unknown>;
+  onCreate: (title: string, note: string, start: boolean, deadlineAt: number | null) => Promise<unknown>;
 }
+
+/** 17:00 local, `days` days from today — end of the working day the work is due. */
+function eveningIn(days: number, now = Date.now()) {
+  const d = new Date(now);
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate() + days, 17, 0).getTime();
+}
+const toDateInput = (t: number) => {
+  const d = new Date(t);
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+};
 
 /** Grow a textarea to fit its content. */
 function autosize(el: HTMLTextAreaElement | null) {
@@ -239,10 +249,14 @@ function autosize(el: HTMLTextAreaElement | null) {
 export function CaptureDialog({ onClose, onCreate }: CaptureDialogProps) {
   const [title, setTitle] = useState('');
   const [note, setNote] = useState('');
+  // A deadline is opt-in: most loops age, only some are owed to someone by a date.
+  const [hasDeadline, setHasDeadline] = useState(false);
+  const [deadlineAt, setDeadlineAt] = useState<number | null>(null);
   const titleRef = useRef<HTMLTextAreaElement>(null);
   const noteRef = useRef<HTMLTextAreaElement>(null);
   const submitted = useRef(false);
-  const has = title.trim().length > 0;
+  const needsDate = hasDeadline && deadlineAt == null;
+  const has = title.trim().length > 0 && !needsDate;
 
   useEffect(() => {
     const prev = document.activeElement as HTMLElement | null;
@@ -255,12 +269,12 @@ export function CaptureDialog({ onClose, onCreate }: CaptureDialogProps) {
 
   const submit = (start: boolean) => {
     if (!has) {
-      titleRef.current?.focus();
+      if (!title.trim()) titleRef.current?.focus();
       return;
     }
     if (submitted.current) return;
     submitted.current = true;
-    void onCreate(title, note, start);
+    void onCreate(title, note, start, hasDeadline ? deadlineAt : null);
     onClose();
   };
 
@@ -325,6 +339,68 @@ export function CaptureDialog({ onClose, onCreate }: CaptureDialogProps) {
             onChange={(e) => setNote(e.target.value.replace(/\n/g, ' '))}
             onKeyDown={onKey}
           />
+          </div>
+        </div>
+
+        <div className="capture__field capture__field--deadline">
+          <span className="capture__label" id="capture-deadline-label">// DOES THIS HAVE A HARD EXTERNAL DEADLINE?</span>
+          <div className="capture__deadline">
+            <div className="capture__seg" role="radiogroup" aria-labelledby="capture-deadline-label">
+              <button
+                type="button"
+                role="radio"
+                aria-checked={!hasDeadline}
+                className="capture__opt"
+                onClick={() => {
+                  setHasDeadline(false);
+                  setDeadlineAt(null);
+                }}
+              >
+                NO · IT AGES
+              </button>
+              <button
+                type="button"
+                role="radio"
+                aria-checked={hasDeadline}
+                className="capture__opt"
+                data-yes="true"
+                onClick={() => setHasDeadline(true)}
+              >
+                YES · COUNT DOWN
+              </button>
+            </div>
+            {hasDeadline && (
+              <div className="capture__chips">
+                {(
+                  [
+                    ['TODAY', 0],
+                    ['TOMORROW', 1],
+                    ['3 DAYS', 3],
+                    ['NEXT WEEK', 7],
+                  ] as const
+                ).map(([label, days]) => (
+                  <button key={label} type="button" className="capture__chip" onClick={() => setDeadlineAt(eveningIn(days))}>
+                    {label}
+                  </button>
+                ))}
+                <input
+                  type="date"
+                  className="capture__chip capture__date"
+                  aria-label="Deadline date"
+                  value={deadlineAt != null ? toDateInput(deadlineAt) : ''}
+                  onChange={(e) => {
+                    if (!e.target.value) return setDeadlineAt(null);
+                    const [y, m, d] = e.target.value.split('-').map(Number);
+                    setDeadlineAt(new Date(y, m - 1, d, 17, 0).getTime());
+                  }}
+                />
+              </div>
+            )}
+            {hasDeadline && (
+              <span className={`capture__due${needsDate ? ' is-missing' : ''}`} role="status">
+                {deadlineAt != null ? `DUE ${fmtDateLabel(deadlineAt)} 17:00` : 'PICK A DATE TO COUNT DOWN TO'}
+              </span>
+            )}
           </div>
         </div>
 
@@ -452,6 +528,11 @@ export const RUN_SORTS = [
   ['longest', 'LONGEST'],
   ['shortest', 'SHORTEST'],
   ['alpha', 'A–Z'],
+] as const;
+export const TIMER_FILTERS = [
+  ['all', 'ALL'],
+  ['deadline', 'DEADLINES'],
+  ['aging', 'AGING'],
 ] as const;
 export const OPEN_SORTS = [
   ['oldest', 'OLDEST'],
