@@ -3,6 +3,7 @@ const p2 = (n: number) => String(Math.floor(n)).padStart(2, '0');
 const MIN = 60_000;
 const HOUR = 3_600_000;
 const DAY = 86_400_000;
+const DAY_S = 86_400;
 
 /**
  * Timer segments: [months] [days] clock. Seconds always tick.
@@ -28,6 +29,33 @@ export function timerParts(ms: number, opts: { noSec?: boolean } = {}): string[]
 /** Timer as text, segments separated by a middle dot. */
 export function fmtTimer(ms: number, opts: { noSec?: boolean } = {}): string {
   return timerParts(ms, opts).join(' · ');
+}
+
+/**
+ * Coarse duration for the list: at most two units, never seconds.
+ *   <1M · 42M · 5H 42M · 3D · 5H · 1MO · 1D · 5H
+ * A list is for scanning, so it stops at the hour; the detail panel keeps the
+ * exact clock for when you actually want it.
+ */
+export function spanParts(ms: number): string[] {
+  const secs = Math.max(0, Math.floor(ms / 1000));
+  const totalDays = Math.floor(secs / DAY_S);
+  const hh = Math.floor((secs % DAY_S) / 3600);
+  const mm = Math.floor((secs % 3600) / 60);
+  const mo = Math.floor(totalDays / 30);
+  if (totalDays > 0) {
+    const parts: string[] = [];
+    if (mo > 0) parts.push(`${mo}MO`);
+    parts.push(`${totalDays - mo * 30}D`, `${hh}H`);
+    return parts;
+  }
+  if (hh > 0) return [`${hh}H ${mm}M`];
+  return [mm > 0 ? `${mm}M` : '<1M'];
+}
+
+/** Coarse duration as text, segments separated by a middle dot. */
+export function fmtSpan(ms: number): string {
+  return spanParts(ms).join(' · ');
 }
 
 /** Accumulated duration label: "02H 14M" or "48M". */

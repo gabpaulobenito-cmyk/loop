@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { fmtAge, fmtClock, fmtDay, fmtTimer, pad2 } from '../../shared/format';
 import type { Loop, Session } from '../../shared/types';
+import { Calendar } from './Calendar';
 
 interface Props {
   loop: Loop;
@@ -10,12 +11,9 @@ interface Props {
   onCancel: () => void;
 }
 
-const MONTHS = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
-const WEEKDAYS = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
 const MIN = 60_000;
 const HOUR = 60 * MIN;
 
-const dayKey = (d: Date) => `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
 const toTime = (t: number) => {
   const d = new Date(t);
   return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
@@ -34,7 +32,6 @@ export function StartEditor({ loop, sessions, now, onSave, onCancel }: Props) {
   const initial = running ? loop.runningSince! : loop.createdAt;
   const [day, setDay] = useState(() => new Date(initial));
   const [time, setTime] = useState(() => toTime(initial));
-  const [view, setView] = useState(() => new Date(new Date(initial).getFullYear(), new Date(initial).getMonth(), 1));
 
   // Open/closed loops can't start after their first session or their close.
   const ceiling = useMemo(() => {
@@ -78,22 +75,9 @@ export function StartEditor({ loop, sessions, now, onSave, onCancel }: Props) {
   };
 
   const setFrom = (t: number) => {
-    const d = new Date(t);
-    setDay(d);
+    setDay(new Date(t));
     setTime(toTime(t));
-    setView(new Date(d.getFullYear(), d.getMonth(), 1));
   };
-
-  // Month grid, padded to whole weeks.
-  const cells = useMemo(() => {
-    const first = new Date(view.getFullYear(), view.getMonth(), 1);
-    const start = new Date(first);
-    start.setDate(1 - first.getDay());
-    return Array.from({ length: 42 }, (_, i) => new Date(start.getFullYear(), start.getMonth(), start.getDate() + i));
-  }, [view]);
-  const today = new Date(now);
-  const endOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1).getTime();
-  const nextMonth = new Date(view.getFullYear(), view.getMonth() + 1, 1);
 
   const presets: [string, number][] = [
     ['15M AGO', now - 15 * MIN],
@@ -133,60 +117,12 @@ export function StartEditor({ loop, sessions, now, onSave, onCancel }: Props) {
         ))}
       </div>
 
-      <div className="cal">
-        <div className="cal__nav">
-          <button
-            type="button"
-            className="cal__step"
-            aria-label="Previous month"
-            onClick={() => setView(new Date(view.getFullYear(), view.getMonth() - 1, 1))}
-          >
-            ‹
-          </button>
-          <span className="cal__month" aria-live="polite">
-            {MONTHS[view.getMonth()]} {view.getFullYear()}
-          </span>
-          <button
-            type="button"
-            className="cal__step"
-            aria-label="Next month"
-            disabled={nextMonth.getTime() >= endOfToday}
-            onClick={() => setView(nextMonth)}
-          >
-            ›
-          </button>
-        </div>
-        <div className="cal__grid" role="grid" aria-label="Choose a date">
-          {WEEKDAYS.map((w, i) => (
-            <span key={i} className="cal__dow" aria-hidden="true">
-              {w}
-            </span>
-          ))}
-          {cells.map((d) => {
-            const outside = d.getMonth() !== view.getMonth();
-            const future = d.getTime() >= endOfToday;
-            const selected = dayKey(d) === dayKey(day);
-            const isToday = dayKey(d) === dayKey(today);
-            return (
-              <button
-                key={d.getTime()}
-                type="button"
-                role="gridcell"
-                className={`cal__day${outside ? ' is-outside' : ''}${selected ? ' is-selected' : ''}${isToday ? ' is-today' : ''}`}
-                disabled={future}
-                aria-selected={selected}
-                aria-label={d.toDateString()}
-                onClick={() => {
-                  setDay(d);
-                  if (outside) setView(new Date(d.getFullYear(), d.getMonth(), 1));
-                }}
-              >
-                {d.getDate()}
-              </button>
-            );
-          })}
-        </div>
-      </div>
+      <Calendar
+        value={day.getTime()}
+        now={now}
+        max={now}
+        onPick={(d) => setDay(new Date(d))}
+      />
 
       <div className="start-edit__time">
         <label className="start-edit__label" htmlFor="start-time">

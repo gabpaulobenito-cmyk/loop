@@ -1,14 +1,18 @@
 import { ApiError, api } from './api';
 import { serverNow } from './clock';
 import { finalizeSession } from '../../shared/timer';
+import { activeNote, cleanNote, makeNote, moveNote, normalizeNotes, notesFromNote } from '../../shared/notes';
 import {
   DEFAULT_SETTINGS,
+  NOTES_MAX,
   NOTE_MAX,
   TITLE_MAX,
   WITH_MAX,
   type Loop,
   type LoopMutationResponse,
+  type NoteItem,
   type Owner,
+  type Scope,
   type Settings,
   type StateResponse,
   type UndoTop,
@@ -49,15 +53,19 @@ const POLL_MS = 20_000;
 
 /** Fill fields an older server may not send yet, so the UI never sees undefined. */
 function normalizeLoop(l: Loop): Loop {
+  // An older server sends one note; a newer one sends the checklist it became.
+  const notes = l.notes ? normalizeNotes(l.notes) : notesFromNote(l.note ?? '');
   return {
     ...l,
-    note: l.note ?? '',
+    notes,
+    note: activeNote(notes),
     owner: l.owner ?? 'mine',
     ownerWith: l.ownerWith ?? '',
     handedOffAt: l.handedOffAt ?? null,
     followUpAt: l.followUpAt ?? null,
     timerType: l.timerType ?? 'elapsed',
     deadlineAt: l.deadlineAt ?? null,
+    scope: l.scope ?? 'work',
   };
 }
 const DOUBLE_TAP_MS = 350;
@@ -301,7 +309,13 @@ export class LoopStore {
   }
 
   /** Create a loop. `text` may contain "Title // context note". */
-  async create(text: string, start: boolean, note = '', deadlineAt: number | null = null): Promise<string | null> {
+  async create(
+    text: string,
+    start: boolean,
+    note = '',
+    deadlineAt: number | null = null,
+    scope: Scope = 'work',
+  ): Promise<string | null> {
     let title = text;
     let ctx = note;
     const split = text.indexOf('//');
@@ -319,6 +333,7 @@ export class LoopStore {
       id,
       title,
       note: ctx,
+      notes: notesFromNote(ctx),
       priority: false,
       state: start ? 'running' : 'open',
       createdAt: now,
@@ -333,6 +348,7 @@ export class LoopStore {
       followUpAt: null,
       timerType: deadlineAt == null ? 'elapsed' : 'countdown',
       deadlineAt,
+      scope,
     };
     this.set({ loops: [optimistic, ...this.state.loops] });
     const q = this.queueFor(id);
@@ -340,7 +356,7 @@ export class LoopStore {
     const ok = await this.mutate(
       id,
       (l) => l,
-      () => api<LoopMutationResponse>('/loops', { method: 'POST', body: { id, title, note: ctx, start, deadlineAt } }),
+      () => api<LoopMutationResponse>('/loops', { method: 'POST', body: { id, title, note: ctx, start, deadlineAt, scope } }),
       'create loop',
     );
     if (!ok && !this.state.pending[id]) {
@@ -427,8 +443,8 @@ export class LoopStore {
     );
   }
 
-  edit(id: string, patch: { title?: string; note?: string }) {
-    const body: { title?: string; note?: string } = {};
+  edit(id: string, patch: { title?: string }) {
+    const body: { title?: string } = {};
     if (patch.title !== undefined) {
       const t = patch.title.replace(/\s+/g, ' ').trim();
       if (!t) {
@@ -437,12 +453,84 @@ export class LoopStore {
       }
       body.title = t.slice(0, TITLE_MAX);
     }
-    if (patch.note !== undefined) body.note = patch.note.replace(/\s+/g, ' ').trim().slice(0, NOTE_MAX);
     return this.mutate(
       id,
       (x) => ({ ...x, ...body }),
       () => api<LoopMutationResponse>(`/loops/${id}`, { method: 'PATCH', body }),
       'save',
+    );
+  }
+
+  // ── Notes ─────────────────────────────────────────────────────────────────
+  // A loop's notes are a checklist the user arranges by hand, and the first
+  // unchecked line is the one its row marquees. Adding, editing, checking off,
+  // moving and removing are all the same write: the arranged list, sent whole.
+
+  private notesOf(id: string): NoteItem[] {
+    return this.state.loops.find((l) => l.id === id)?.notes ?? [];
+  }
+
+  setNotes(id: string, next: NoteItem[]) {
+    const notes = normalizeNotes(next);
+    return this.mutate(
+      id,
+      (l) => ({ ...l, notes, note: activeNote(notes) }),
+      () => api<LoopMutationResponse>(`/loops/${id}`, { method: 'PATCH', body: { notes } }),
+      'save notes',
+    );
+  }
+
+  /** Add a line at the end of the list. */
+  addNote(id: string, text: string) {
+    const t = cleanNote(text);
+    if (!t) return Promise.resolve(false);
+    const notes = this.notesOf(id);
+    if (notes.length >= NOTES_MAX) {
+      this.notify(`A loop holds ${NOTES_MAX} notes — check some off first`);
+      return Promise.resolve(false);
+    }
+    return this.setNotes(id, [...notes, makeNote(t)]);
+  }
+
+  /** Rewrite one line. Emptying it removes the line. */
+  editNote(id: string, noteId: string, text: string) {
+    const t = cleanNote(text);
+    const notes = this.notesOf(id);
+    if (!notes.some((n) => n.id === noteId)) return Promise.resolve(false);
+    if (!t) return this.removeNote(id, noteId);
+    if (notes.some((n) => n.id === noteId && n.text === t)) return Promise.resolve(true);
+    return this.setNotes(
+      id,
+      notes.map((n) => (n.id === noteId ? { ...n, text: t } : n)),
+    );
+  }
+
+  /** Check a line off, or bring it back. Its place in the list never moves. */
+  toggleNote(id: string, noteId: string) {
+    const notes = this.notesOf(id);
+    if (!notes.some((n) => n.id === noteId)) return Promise.resolve(false);
+    return this.setNotes(
+      id,
+      notes.map((n) => (n.id === noteId ? { ...n, done: !n.done } : n)),
+    );
+  }
+
+  /** Move a line to `to`, which is how the ticker line is chosen. */
+  moveNote(id: string, noteId: string, to: number) {
+    const notes = this.notesOf(id);
+    const from = notes.findIndex((n) => n.id === noteId);
+    if (from === -1) return Promise.resolve(false);
+    const next = moveNote(notes, from, to);
+    if (next === notes) return Promise.resolve(true);
+    return this.setNotes(id, next);
+  }
+
+  removeNote(id: string, noteId: string) {
+    const notes = this.notesOf(id);
+    if (!notes.some((n) => n.id === noteId)) return Promise.resolve(false);
+    return this.setNotes(
+      id,
+      notes.filter((n) => n.id !== noteId),
     );
   }
 
@@ -493,6 +581,19 @@ export class LoopStore {
       (l) => ({ ...l, timerType: 'elapsed', deadlineAt: null }),
       () => api<LoopMutationResponse>(`/loops/${id}`, { method: 'PATCH', body: { timerType: 'elapsed' } }),
       'drop the deadline',
+    );
+  }
+
+  /**
+   * Move a loop between work and personal. Undoable like any other action, so a
+   * mis-tap never quietly relocates something you then can't find.
+   */
+  setScope(id: string, scope: Scope) {
+    return this.mutate(
+      id,
+      (l) => ({ ...l, scope }),
+      () => api<LoopMutationResponse>(`/loops/${id}`, { method: 'PATCH', body: { scope } }),
+      `move it to ${scope}`,
     );
   }
 

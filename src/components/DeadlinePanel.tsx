@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
-import { dayGap, fmtDateLabel, pad2 } from '../../shared/format';
+import { dayGap, fmtDateLabel } from '../../shared/format';
 import { deadlineTier, remainingMs } from '../../shared/timer';
 import type { Loop } from '../../shared/types';
 import { Countdown } from './Countdown';
+import { DatePopup } from './DatePopup';
 
 interface Props {
   loop: Loop;
@@ -11,14 +12,16 @@ interface Props {
   onDrop: () => void;
 }
 
-/** 17:00 local, `days` days from today — end of the working day the work is due. */
+/** Deadlines land at 17:00 local — the end of the working day the work is owed. */
+const DUE_HOUR = 17;
+/** 17:00 local, `days` days from today. */
 function eveningIn(days: number, now: number) {
   const d = new Date(now);
-  return new Date(d.getFullYear(), d.getMonth(), d.getDate() + days, 17, 0).getTime();
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate() + days, DUE_HOUR, 0).getTime();
 }
-const toDateInput = (t: number) => {
-  const d = new Date(t);
-  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+const eveningOn = (dayStart: number) => {
+  const d = new Date(dayStart);
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate(), DUE_HOUR, 0).getTime();
 };
 
 function deadlineStatus(at: number, now: number): string {
@@ -42,15 +45,20 @@ function deadlineStatus(at: number, now: number): string {
 export function DeadlinePanel({ loop, now, onSet, onDrop }: Props) {
   const countdown = loop.timerType === 'countdown';
   const [picking, setPicking] = useState(false);
+  const [calOpen, setCalOpen] = useState(false);
   const [confirmDrop, setConfirmDrop] = useState(false);
 
   useEffect(() => {
     setPicking(false);
+    setCalOpen(false);
     setConfirmDrop(false);
   }, [loop.id]);
   useEffect(() => {
     if (countdown) setPicking(false);
-    else setConfirmDrop(false);
+    else {
+      setConfirmDrop(false);
+      setCalOpen(false);
+    }
   }, [countdown]);
   useEffect(() => {
     if (!confirmDrop) return;
@@ -62,10 +70,9 @@ export function DeadlinePanel({ loop, now, onSet, onDrop }: Props) {
   const left = remainingMs(loop, now);
   const showChips = countdown || picking;
 
-  const pickDate = (value: string) => {
-    if (!value) return;
-    const [y, m, d] = value.split('-').map(Number);
-    onSet(new Date(y, m - 1, d, 17, 0).getTime());
+  const pick = (at: number) => {
+    setCalOpen(false);
+    onSet(at);
   };
 
   return (
@@ -84,7 +91,11 @@ export function DeadlinePanel({ loop, now, onSet, onDrop }: Props) {
           data-type="elapsed"
           title="Counts up from when this loop was opened"
           onClick={() => {
-            if (!countdown) return setPicking(false);
+            if (!countdown) {
+              setPicking(false);
+              setCalOpen(false);
+              return;
+            }
             setConfirmDrop(true);
           }}
         >
@@ -99,7 +110,10 @@ export function DeadlinePanel({ loop, now, onSet, onDrop }: Props) {
           title="Counts down to a hard external deadline"
           onClick={() => {
             setConfirmDrop(false);
-            if (!countdown) setPicking(true);
+            if (countdown) return;
+            // Asking for a deadline means asking which date: open the calendar with it.
+            setPicking(true);
+            setCalOpen(true);
           }}
         >
           DEADLINE
@@ -126,7 +140,7 @@ export function DeadlinePanel({ loop, now, onSet, onDrop }: Props) {
       )}
 
       <div className="dlp__row">
-        <span className="dlp__label dlp__label--inline">{countdown ? 'DUE' : 'AGE'}</span>
+        <span className="dlp__label dlp__label--inline">{countdown || picking ? 'DUE' : 'AGE'}</span>
         <span className={`dlp__status${tier === 'urgent' || tier === 'overdue' ? ' is-hot' : ''}`} role="status">
           {countdown && loop.deadlineAt != null
             ? deadlineStatus(loop.deadlineAt, now)
@@ -137,27 +151,41 @@ export function DeadlinePanel({ loop, now, onSet, onDrop }: Props) {
       </div>
 
       {showChips && (
-        <div className="dlp__chips">
-          {(
-            [
-              ['TODAY', 0],
-              ['TOMORROW', 1],
-              ['3 DAYS', 3],
-              ['NEXT WEEK', 7],
-            ] as const
-          ).map(([label, days]) => (
-            <button key={label} type="button" className="dlp__chip" onClick={() => onSet(eveningIn(days, now))}>
-              {label}
+        <>
+          <div className="dlp__chips">
+            {(
+              [
+                ['TODAY', 0],
+                ['TOMORROW', 1],
+                ['3 DAYS', 3],
+                ['NEXT WEEK', 7],
+              ] as const
+            ).map(([label, days]) => (
+              <button key={label} type="button" className="dlp__chip" onClick={() => pick(eveningIn(days, now))}>
+                {label}
+              </button>
+            ))}
+            <button
+              type="button"
+              className="dlp__chip dlp__datebtn"
+              aria-expanded={calOpen}
+              aria-label={loop.deadlineAt != null ? `Deadline ${fmtDateLabel(loop.deadlineAt)} — pick another date` : 'Pick a deadline date'}
+              onClick={() => setCalOpen((v) => !v)}
+            >
+              {loop.deadlineAt != null ? fmtDateLabel(loop.deadlineAt) : 'PICK A DATE'}
+              <span className="dlp__caret" aria-hidden="true">{calOpen ? '▴' : '▾'}</span>
             </button>
-          ))}
-          <input
-            type="date"
-            className="dlp__chip dlp__date"
-            aria-label="Deadline date"
-            value={loop.deadlineAt != null ? toDateInput(loop.deadlineAt) : ''}
-            onChange={(e) => pickDate(e.target.value)}
-          />
-        </div>
+          </div>
+          {calOpen && (
+            <DatePopup
+              title="LOOP // DEADLINE"
+              value={loop.deadlineAt}
+              now={now}
+              onPick={(day) => pick(eveningOn(day))}
+              onClose={() => setCalOpen(false)}
+            />
+          )}
+        </>
       )}
     </div>
   );

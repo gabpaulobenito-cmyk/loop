@@ -1,11 +1,14 @@
 import { Fragment } from 'react';
-import { fmtTimer, timerParts } from '../../shared/format';
+import { fmtSpan, fmtTimer, spanParts, timerParts } from '../../shared/format';
 
-/** Ticking timer with small dots between months, days and the clock. */
-export function TimerText({ ms, className }: { ms: number; className?: string }) {
-  const parts = timerParts(ms);
+/**
+ * Timer with small dots between months, days and the clock. `coarse` stops at
+ * the hour for list rows; without it the clock ticks down to the second.
+ */
+export function TimerText({ ms, className, coarse }: { ms: number; className?: string; coarse?: boolean }) {
+  const parts = coarse ? spanParts(ms) : timerParts(ms);
   return (
-    <span className={className} aria-label={fmtTimer(ms)}>
+    <span className={className} aria-label={coarse ? fmtSpan(ms) : fmtTimer(ms)}>
       {parts.map((p, i) => (
         <Fragment key={i}>
           {i > 0 && (

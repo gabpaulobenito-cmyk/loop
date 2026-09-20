@@ -20,6 +20,7 @@ function loop(p: Partial<Loop> & { id: string }): Loop {
   return {
     title: p.id,
     note: '',
+    notes: [],
     priority: false,
     state: 'open',
     createdAt: 0,
@@ -28,6 +29,7 @@ function loop(p: Partial<Loop> & { id: string }): Loop {
     accumulatedMs: 0,
     sessionCount: 0,
     updatedAt: 0,
+    scope: 'work',
     owner: 'mine',
     ownerWith: '',
     handedOffAt: null,

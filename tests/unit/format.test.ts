@@ -1,5 +1,18 @@
 import { describe, expect, it } from 'vitest';
-import { ageLevel, dayGap, fmtAge, fmtDateLabel, fmtDuration, fmtHeaderClock, fmtHM, fmtTimer, neglectMark, timerParts } from '../../shared/format';
+import {
+  ageLevel,
+  dayGap,
+  fmtAge,
+  fmtDateLabel,
+  fmtDuration,
+  fmtHeaderClock,
+  fmtHM,
+  fmtSpan,
+  fmtTimer,
+  neglectMark,
+  spanParts,
+  timerParts,
+} from '../../shared/format';
 
 const S = 1000, M = 60 * S, H = 60 * M, D = 24 * H;
 
@@ -74,5 +87,28 @@ describe('dates', () => {
     expect(dayGap(noon, new Date(2026, 8, 18, 23, 0).getTime())).toBe(0);
     expect(dayGap(noon, new Date(2026, 8, 19, 1, 0).getTime())).toBe(1);
     expect(dayGap(noon, new Date(2026, 8, 15, 9, 0).getTime())).toBe(-3);
+  });
+});
+
+describe('fmtSpan', () => {
+  it('stops at the hour so a list can be scanned, not read', () => {
+    expect(fmtSpan(31 * D + 5 * H + 42 * M + 59 * S)).toBe('1MO · 1D · 5H');
+    expect(fmtSpan(8 * D + 5 * H)).toBe('8D · 5H');
+    expect(fmtSpan(3 * D)).toBe('3D · 0H');
+    expect(fmtSpan(5 * H + 42 * M + 59 * S)).toBe('5H 42M');
+    expect(fmtSpan(42 * M + 59 * S)).toBe('42M');
+  });
+
+  it('never reads zero for something that has only just started', () => {
+    expect(fmtSpan(0)).toBe('<1M');
+    expect(fmtSpan(59 * S)).toBe('<1M');
+    expect(fmtSpan(60 * S)).toBe('1M');
+    expect(fmtSpan(-5)).toBe('<1M');
+  });
+
+  it('counts months in 30-day blocks, like the full timer', () => {
+    expect(fmtSpan(60 * D + 3 * H)).toBe('2MO · 0D · 3H');
+    expect(spanParts(31 * D + 5 * H)).toEqual(['1MO', '1D', '5H']);
+    expect(spanParts(4 * H)).toEqual(['4H 0M']);
   });
 });

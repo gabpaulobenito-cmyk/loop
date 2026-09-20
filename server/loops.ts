@@ -3,12 +3,15 @@ import type { Client, Pool } from './db';
 import { withTx } from './db';
 import { HttpError, notFound } from './errors';
 import { finalizeSession } from '../shared/timer';
+import { activeNote, normalizeNotes, notesFromNote } from '../shared/notes';
 import {
   DEFAULT_SETTINGS,
   UNDO_WINDOW_MS,
   type Loop,
   type LoopState,
+  type NoteItem,
   type Owner,
+  type Scope,
   type Session,
   type Settings,
   type TimerType,
@@ -16,12 +19,14 @@ import {
 } from '../shared/types';
 
 type ActionKind =
-  | 'create' | 'start' | 'stop' | 'close' | 'reopen' | 'priority' | 'edit' | 'delete' | 'retime' | 'handoff' | 'deadline';
+  | 'create' | 'start' | 'stop' | 'close' | 'reopen' | 'priority' | 'edit' | 'delete' | 'retime' | 'handoff' | 'deadline' | 'scope';
 
 interface LoopRow {
   id: string;
   title: string;
+  /** Derived cache of the first unchecked line of `notes`. */
   note: string;
+  notes: NoteItem[];
   priority: boolean;
   state: LoopState;
   created_at: Date;
@@ -37,6 +42,7 @@ interface LoopRow {
   follow_up_at: Date | null;
   timer_type: TimerType;
   deadline_at: Date | null;
+  scope: Scope;
   session_count?: number;
 }
 
@@ -44,6 +50,8 @@ interface LoopRow {
 interface Snapshot {
   title: string;
   note: string;
+  /** Present on snapshots taken after the note became a checklist. */
+  notes?: NoteItem[];
   priority: boolean;
   state: LoopState;
   closedAt: number | null;
@@ -60,6 +68,8 @@ interface Snapshot {
   /** Present on snapshots taken after the countdown timer was added. */
   timerType?: TimerType;
   deadlineAt?: number | null;
+  /** Present on snapshots taken after work/personal scope was added. */
+  scope?: Scope;
   /** Original start of a session moved by a retime action. */
   sessionStart?: { id: string; startedAt: number };
   /** Earlier sessions a backdated running session absorbed (restored on undo). */
@@ -74,10 +84,12 @@ const LOOP_SELECT = `
   FROM loops l`;
 
 function toLoop(r: LoopRow): Loop {
+  const notes = normalizeNotes(r.notes);
   return {
     id: r.id,
     title: r.title,
-    note: r.note,
+    note: activeNote(notes),
+    notes,
     priority: r.priority,
     state: r.state,
     createdAt: r.created_at.getTime(),
@@ -92,6 +104,7 @@ function toLoop(r: LoopRow): Loop {
     followUpAt: ms(r.follow_up_at),
     timerType: r.timer_type,
     deadlineAt: ms(r.deadline_at),
+    scope: r.scope,
   };
 }
 
@@ -99,6 +112,7 @@ function snapshot(r: LoopRow): Snapshot {
   return {
     title: r.title,
     note: r.note,
+    notes: normalizeNotes(r.notes),
     priority: r.priority,
     state: r.state,
     closedAt: ms(r.closed_at),
@@ -112,6 +126,7 @@ function snapshot(r: LoopRow): Snapshot {
     followUpAt: ms(r.follow_up_at),
     timerType: r.timer_type,
     deadlineAt: ms(r.deadline_at),
+    scope: r.scope,
   };
 }
 
@@ -241,7 +256,7 @@ async function openSession(c: Client, loopId: string, now: number): Promise<stri
 
 export async function createLoop(
   pool: Pool,
-  input: { id: string; title: string; note: string; start: boolean; deadlineAt?: number | null },
+  input: { id: string; title: string; note: string; start: boolean; deadlineAt?: number | null; scope?: Scope },
   now: number,
 ): Promise<MutationResult> {
   return withTx(pool, async (c) => {
@@ -249,11 +264,26 @@ export async function createLoop(
     // A deadline at creation is what makes a loop a countdown; without one it ages.
     const deadlineAt = input.deadlineAt ?? null;
     const timerType: TimerType = deadlineAt == null ? 'elapsed' : 'countdown';
+    // A loop is born into whichever world the workspace was in.
+    const scope: Scope = input.scope ?? 'work';
+    // A loop is captured with at most one line; the rest of the checklist grows later.
+    const notes = notesFromNote(input.note);
     const inserted = await c.query(
-      `INSERT INTO loops (id, title, note, state, created_at, running_since, updated_at, timer_type, deadline_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $5, $7, $8)
+      `INSERT INTO loops (id, title, note, notes, state, created_at, running_since, updated_at, timer_type, deadline_at, scope)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $6, $8, $9, $10)
        ON CONFLICT (id) DO NOTHING`,
-      [input.id, input.title, input.note, state, new Date(now), input.start ? new Date(now) : null, timerType, at(deadlineAt)],
+      [
+        input.id,
+        input.title,
+        activeNote(notes),
+        JSON.stringify(notes),
+        state,
+        new Date(now),
+        input.start ? new Date(now) : null,
+        timerType,
+        at(deadlineAt),
+        scope,
+      ],
     );
     // Same client id submitted twice: return the existing loop, no duplicate.
     if (!inserted.rowCount) {
@@ -329,13 +359,17 @@ export function reopenLoop(pool: Pool, id: string, now: number) {
 
 export interface LoopPatch {
   title?: string;
+  /** Legacy single note: rewrites the line the ticker reads. Prefer `notes`. */
   note?: string;
+  /** The whole checklist, in the order it should keep. */
+  notes?: NoteItem[];
   priority?: boolean;
   owner?: Owner;
   ownerWith?: string;
   followUpAt?: number | null;
   timerType?: TimerType;
   deadlineAt?: number | null;
+  scope?: Scope;
 }
 
 /**
@@ -363,6 +397,23 @@ function resolveTimer(row: LoopRow, patch: LoopPatch): { timerType: TimerType; d
   return { timerType: 'countdown', deadlineAt };
 }
 
+/**
+ * Resolve the checklist half of a patch. `notes` replaces the whole list — that
+ * one shape covers adding, editing, checking off and rearranging, and the
+ * arrangement is what decides which line the ticker reads. A legacy `note`
+ * rewrites the active line (or starts the list) without disturbing the rest.
+ */
+function resolveNotes(row: LoopRow, patch: LoopPatch): NoteItem[] {
+  if (patch.notes !== undefined) return normalizeNotes(patch.notes);
+  if (patch.note === undefined) return normalizeNotes(row.notes);
+  const current = normalizeNotes(row.notes);
+  const text = patch.note.trim();
+  const i = current.findIndex((n) => !n.done);
+  if (i === -1) return text ? [...current, ...notesFromNote(text)] : current;
+  if (!text) return current.filter((_, k) => k !== i);
+  return current.map((n, k) => (k === i ? { ...n, text } : n));
+}
+
 /** Append-only conversion record, kept for later pattern analysis. */
 async function logTimerChange(c: Client, loopId: string, from: TimerType, to: TimerType, deadlineAt: number | null, now: number) {
   await c.query(
@@ -374,7 +425,8 @@ async function logTimerChange(c: Client, loopId: string, from: TimerType, to: Ti
 export function updateLoop(pool: Pool, id: string, patch: LoopPatch, now: number) {
   return mutate(pool, id, now, async (c, row) => {
     const title = patch.title ?? row.title;
-    const note = patch.note ?? row.note;
+    const notes = resolveNotes(row, patch);
+    const note = activeNote(notes);
     const priority = patch.priority ?? row.priority;
 
     // Ball in court. Going back to `mine` clears who it's with and the follow-up.
@@ -387,8 +439,12 @@ export function updateLoop(pool: Pool, id: string, patch: LoopPatch, now: number
     // Which clock it reads, and the date behind it.
     const { timerType, deadlineAt } = resolveTimer(row, patch);
 
+    // Which world it lives in.
+    const scope: Scope = patch.scope ?? row.scope;
+
     const priorityChanged = priority !== row.priority;
-    const textChanged = title !== row.title || note !== row.note;
+    const notesChanged = JSON.stringify(notes) !== JSON.stringify(normalizeNotes(row.notes));
+    const textChanged = title !== row.title || notesChanged;
     const ownerChanged = owner !== row.owner;
     const withChanged = ownerWith !== row.owner_with;
     const followChanged = followUpAt !== ms(row.follow_up_at);
@@ -396,16 +452,36 @@ export function updateLoop(pool: Pool, id: string, patch: LoopPatch, now: number
     const typeChanged = timerType !== row.timer_type;
     const deadlineChanged = deadlineAt !== ms(row.deadline_at);
     const timerChanged = typeChanged || deadlineChanged;
-    if (!priorityChanged && !textChanged && !handoffChanged && !timerChanged) return null;
+    const scopeChanged = scope !== row.scope;
+    if (!priorityChanged && !textChanged && !handoffChanged && !timerChanged && !scopeChanged) return null;
 
     await c.query(
-      `UPDATE loops SET title = $2, note = $3, priority = $4, owner = $5, owner_with = $6, handed_off_at = $7,
-         follow_up_at = $8, timer_type = $10, deadline_at = $11, version = version + 1, updated_at = $9 WHERE id = $1`,
-      [id, title, note, priority, owner, ownerWith, at(handedOffAt), at(followUpAt), new Date(now), timerType, at(deadlineAt)],
+      `UPDATE loops SET title = $2, note = $3, notes = $13, priority = $4, owner = $5, owner_with = $6, handed_off_at = $7,
+         follow_up_at = $8, timer_type = $10, deadline_at = $11, scope = $12, version = version + 1, updated_at = $9 WHERE id = $1`,
+      [
+        id,
+        title,
+        note,
+        priority,
+        owner,
+        ownerWith,
+        at(handedOffAt),
+        at(followUpAt),
+        new Date(now),
+        timerType,
+        at(deadlineAt),
+        scope,
+        JSON.stringify(notes),
+      ],
     );
     if (typeChanged) await logTimerChange(c, id, row.timer_type, timerType, deadlineAt, now);
 
-    if (timerChanged && !priorityChanged && !textChanged && !handoffChanged) {
+    // Moving a loop between worlds is its own action, so undo puts it back.
+    if (scopeChanged && !priorityChanged && !textChanged && !handoffChanged && !timerChanged) {
+      return { kind: 'scope', label: `Moved ${quote(title)} to ${scope}` };
+    }
+
+    if (timerChanged && !priorityChanged && !textChanged && !handoffChanged && !scopeChanged) {
       const label = typeChanged
         ? timerType === 'countdown'
           ? `Set a deadline on ${quote(title)}`
@@ -414,7 +490,7 @@ export function updateLoop(pool: Pool, id: string, patch: LoopPatch, now: number
       return { kind: 'deadline', label };
     }
 
-    if (handoffChanged && !priorityChanged && !textChanged && !timerChanged) {
+    if (handoffChanged && !priorityChanged && !textChanged && !timerChanged && !scopeChanged) {
       const who = ownerWith ? ` ${ownerWith}` : '';
       let label: string;
       if (ownerChanged && owner === 'mine') label = `Took back ${quote(title)}`;
@@ -424,15 +500,15 @@ export function updateLoop(pool: Pool, id: string, patch: LoopPatch, now: number
       else label = `${followUpAt == null ? 'Cleared follow-up on' : 'Set follow-up on'} ${quote(title)}`;
       return { kind: 'handoff', label };
     }
-    if (priorityChanged && !textChanged && !handoffChanged && !timerChanged) {
+    if (priorityChanged && !textChanged && !handoffChanged && !timerChanged && !scopeChanged) {
       return { kind: 'priority', label: `${priority ? 'Flagged' : 'Cleared priority on'} ${quote(title)}` };
     }
     const what =
-      handoffChanged || priorityChanged || timerChanged || (title !== row.title && note !== row.note)
+      handoffChanged || priorityChanged || timerChanged || scopeChanged || (title !== row.title && notesChanged)
         ? 'Edited'
         : title !== row.title
           ? 'Renamed'
-          : 'Edited note on';
+          : 'Edited notes on';
     return { kind: 'edit', label: `${what} ${quote(title)}` };
   });
 }
@@ -602,6 +678,9 @@ export async function undoLast(pool: Pool, now: number): Promise<MutationResult>
         [h.loop_id, b.owner, b.ownerWith ?? '', at(b.handedOffAt ?? null), at(b.followUpAt ?? null)],
       );
     }
+    if (b.scope !== undefined) {
+      await c.query('UPDATE loops SET scope = $2 WHERE id = $1', [h.loop_id, b.scope]);
+    }
     if (b.timerType !== undefined) {
       await c.query('UPDATE loops SET timer_type = $2, deadline_at = $3 WHERE id = $1', [
         h.loop_id,
@@ -622,11 +701,25 @@ export async function undoLast(pool: Pool, now: number): Promise<MutationResult>
     if (h.session_ended_id) {
       await c.query('UPDATE loop_sessions SET ended_at = NULL WHERE id = $1', [h.session_ended_id]);
     }
+    // Snapshots taken before the checklist existed carry a single note line.
+    const beforeNotes = b.notes !== undefined ? normalizeNotes(b.notes) : notesFromNote(b.note);
     await c.query(
-      `UPDATE loops SET title = $2, note = $3, priority = $4, state = $5, closed_at = $6, running_since = $7,
+      `UPDATE loops SET title = $2, note = $3, notes = $11, priority = $4, state = $5, closed_at = $6, running_since = $7,
          accumulated_ms = $8, version = $10, updated_at = $9, deleted_at = NULL WHERE id = $1`,
       // Restoring the prior version lets the next-older action be undone too.
-      [h.loop_id, b.title, b.note, b.priority, b.state, at(b.closedAt), at(b.runningSince), b.accumulatedMs, new Date(now), b.version],
+      [
+        h.loop_id,
+        b.title,
+        activeNote(beforeNotes),
+        b.priority,
+        b.state,
+        at(b.closedAt),
+        at(b.runningSince),
+        b.accumulatedMs,
+        new Date(now),
+        b.version,
+        JSON.stringify(beforeNotes),
+      ],
     );
     await c.query('UPDATE action_history SET undone_at = $2 WHERE id = $1', [h.id, new Date(now)]);
     return { loop: await getLoop(c, h.loop_id), undo: await getUndoTop(c, now), changed: true };

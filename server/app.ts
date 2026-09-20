@@ -7,7 +7,7 @@ import { z } from 'zod';
 import type { Pool } from './db';
 import { HttpError } from './errors';
 import * as loops from './loops';
-import { DATE_RANGE_MS, NOTE_MAX, TITLE_MAX, WITH_MAX, type LoopMutationResponse } from '../shared/types';
+import { DATE_RANGE_MS, NOTES_MAX, NOTE_MAX, TITLE_MAX, WITH_MAX, type LoopMutationResponse } from '../shared/types';
 
 export interface AppOptions {
   pool: Pool;
@@ -28,6 +28,17 @@ const note = z
   .transform(cleanLine)
   .pipe(z.string().max(NOTE_MAX, `Note must be ${NOTE_MAX} characters or fewer`));
 
+// One line of a loop's checklist. The array's order is meaningful — it is what
+// decides which line the row marquee reads — so a patch always sends the whole list.
+const noteItem = z
+  .object({
+    id: z.string().min(1).max(64),
+    text: note,
+    done: z.boolean().optional().default(false),
+  })
+  .strict();
+const notes = z.array(noteItem).max(NOTES_MAX, `A checklist holds at most ${NOTES_MAX} notes`);
+
 // A date within a decade either way: far enough for real deadlines, tight
 // enough to catch a mistyped year or a millisecond/second mix-up.
 const dateMs = z
@@ -42,6 +53,8 @@ const createSchema = z.object({
   start: z.boolean().optional().default(false),
   // Present only when the loop has a hard external deadline.
   deadlineAt: dateMs.nullable().optional(),
+  // Which world it is born into; the client sends whichever scope it is in.
+  scope: z.enum(['work', 'personal']).optional(),
 });
 const ownerWith = z
   .string()
@@ -51,12 +64,14 @@ const patchSchema = z
   .object({
     title: title.optional(),
     note: note.optional(),
+    notes: notes.optional(),
     priority: z.boolean().optional(),
     owner: z.enum(['mine', 'delegated', 'waiting']).optional(),
     ownerWith: ownerWith.optional(),
     followUpAt: dateMs.nullable().optional(),
     timerType: z.enum(['elapsed', 'countdown']).optional(),
     deadlineAt: dateMs.nullable().optional(),
+    scope: z.enum(['work', 'personal']).optional(),
   })
   .strict()
   .refine((v) => Object.values(v).some((x) => x !== undefined), 'Nothing to update');

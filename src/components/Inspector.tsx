@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { fmtAge, fmtClock, fmtDay, fmtDuration, fmtHM, pad2 } from '../../shared/format';
 import { currentSessionMs, deadlineTier, elapsedMs } from '../../shared/timer';
-import type { Loop, Session } from '../../shared/types';
+import { openNotes } from '../../shared/notes';
+import type { Loop, Scope, Session } from '../../shared/types';
 import { api } from '../lib/api';
 import { Countdown } from './Countdown';
 import { DeadlinePanel } from './DeadlinePanel';
 import { Marker } from './Marker';
+import { NotesPanel, type NotesActions } from './NotesPanel';
 import { StartEditor } from './StartEditor';
 import { OwnerPanel, type HandoffPatch } from './OwnerPanel';
 import { TimerText } from './TimerText';
@@ -16,12 +18,15 @@ export interface InspectorActions {
   reopen: (id: string) => void;
   close: (id: string) => void;
   priority: (id: string) => void;
-  edit: (id: string, patch: { title?: string; note?: string }) => Promise<boolean>;
+  edit: (id: string, patch: { title?: string }) => Promise<boolean>;
+  /** The checklist under the title; its first unchecked line is what the row marquees. */
+  notes: (id: string) => NotesActions;
   remove: (id: string) => void;
   retime: (id: string, startedAt: number, predictedAccumulatedMs?: number) => void;
   handoff: (id: string, patch: HandoffPatch) => void;
   setDeadline: (id: string, deadlineAt: number) => void;
   dropDeadline: (id: string) => void;
+  setScope: (id: string, scope: Scope) => void;
 }
 
 interface Props {
@@ -68,10 +73,12 @@ function useSessions(loop: Loop | null) {
 
 export function Inspector({ loop, now, docked = false, pending, keysEnabled, onDismiss, actions }: Props) {
   const rootRef = useRef<HTMLElement>(null);
-  const [editing, setEditing] = useState<'title' | 'note' | null>(null);
+  const [editing, setEditing] = useState<'title' | null>(null);
   const [draft, setDraft] = useState('');
   // Source of truth for the active edit, so blur-after-Escape cannot save.
-  const editingRef = useRef<'title' | 'note' | null>(null);
+  const editingRef = useRef<'title' | null>(null);
+  // Bumped to send the cursor into the checklist's add field (the NOTES action, N).
+  const [focusNotes, setFocusNotes] = useState(0);
   const sessions = useSessions(loop);
   // Deleting takes a second click so a stray tap can't remove a loop.
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -86,7 +93,7 @@ export function Inspector({ loop, now, docked = false, pending, keysEnabled, onD
     return () => clearTimeout(t);
   }, [confirmDelete]);
 
-  const setEdit = (field: 'title' | 'note' | null) => {
+  const setEdit = (field: 'title' | null) => {
     editingRef.current = field;
     setEditing(field);
   };
@@ -102,23 +109,24 @@ export function Inspector({ loop, now, docked = false, pending, keysEnabled, onD
     return () => prev?.focus?.();
   }, [docked]);
 
-  const beginEdit = (field: 'title' | 'note') => {
+  const beginEdit = (field: 'title') => {
     if (!loop) return;
-    setDraft(field === 'title' ? loop.title : loop.note);
+    setDraft(loop.title);
     setEdit(field);
   };
+
+  const addNote = () => setFocusNotes((n) => n + 1);
 
   const commit = async () => {
     const field = editingRef.current;
     if (!loop || !field) return;
     const value = draft.replace(/\s+/g, ' ').trim();
     setEdit(null);
-    if (field === 'title' && (!value || value === loop.title)) return;
-    if (field === 'note' && value === loop.note) return;
+    if (!value || value === loop.title) return;
     await actions.edit(loop.id, { [field]: value });
   };
 
-  // Inspector shortcuts: S start/stop, P priority, E rename, N note, ⌫ close.
+  // Inspector shortcuts: S start/stop, P priority, E rename, N add a note, ⌫ close.
   useEffect(() => {
     if (!keysEnabled || !loop || editingStart) return;
     const onKey = (e: KeyboardEvent) => {
@@ -139,13 +147,18 @@ export function Inspector({ loop, now, docked = false, pending, keysEnabled, onD
       } else if (k === 'e') {
         e.preventDefault();
         beginEdit('title');
+      } else if (k === 'n') {
+        e.preventDefault();
+        addNote();
       } else if ((e.key === 'Backspace' || e.key === 'Delete') && loop.state !== 'closed') {
         e.preventDefault();
         actions.close(loop.id);
       }
     };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    // Captured, so an open detail gets first refusal on these letters — otherwise
+    // the workspace's own N would open a new loop instead of adding a note here.
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
   });
 
   const dismiss = docked ? null : (
@@ -173,6 +186,9 @@ export function Inspector({ loop, now, docked = false, pending, keysEnabled, onD
 
   const running = loop.state === 'running';
   const closed = loop.state === 'closed';
+  // How much of the checklist is waiting behind the line on the row.
+  const notesLeft = openNotes(loop.notes);
+  const noteTail = notesLeft > 1 ? ` +${notesLeft - 1} MORE` : '';
   const total = elapsedMs(loop, now);
   const tier = deadlineTier(loop, now);
 
@@ -214,13 +230,19 @@ export function Inspector({ loop, now, docked = false, pending, keysEnabled, onD
         },
     ...(!closed ? [{ key: 'priority', label: 'PRIORITY', pressed: loop.priority, run: () => actions.priority(loop.id) }] : []),
     { key: 'rename', label: 'RENAME', title: 'Rename (E)', run: () => beginEdit('title') },
-    { key: 'note', label: loop.note ? 'NOTE' : 'ADD NOTE', run: () => beginEdit('note') },
+    { key: 'note', label: 'ADD NOTE', title: 'Add a line to the checklist (N)', run: addNote },
     {
       key: 'start',
       label: 'EDIT START',
       pressed: editingStart,
       title: running ? 'Change when this session really started' : 'Change when this loop was opened',
       run: () => setEditingStart((v) => !v),
+    },
+    {
+      key: 'scope',
+      label: loop.scope === 'personal' ? 'MOVE TO WORK' : 'MOVE TO PERSONAL',
+      title: `This loop lives in ${loop.scope}. Move it to the other side.`,
+      run: () => actions.setScope(loop.id, loop.scope === 'personal' ? 'work' : 'personal'),
     },
     {
       key: 'delete',
@@ -253,6 +275,7 @@ export function Inspector({ loop, now, docked = false, pending, keysEnabled, onD
         <span className="term-bar__path">
           <span className="term-bar__prefix">LOOP // </span>
           <span className={`term-bar__state term-bar__state--${loop.state}`}>{loop.state.toUpperCase()}</span>
+          {loop.scope === 'personal' && <span className="term-bar__scope"> · PERSONAL</span>}
           {loop.priority && <span className="term-bar__prio"> · PRIORITY</span>}
           {tier !== 'none' && (
             <span className="term-bar__dl" data-tier={tier}>
@@ -289,23 +312,16 @@ export function Inspector({ loop, now, docked = false, pending, keysEnabled, onD
               {loop.title}
             </span>
           )}
-          {editing === 'note' ? (
-            <input
-              className="insp-edit insp-edit--note"
-              aria-label="Context note"
-              autoFocus
-              maxLength={280}
-              placeholder="Short context note"
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              onKeyDown={editKeys}
-              onBlur={() => void commit()}
-            />
-          ) : (
-            <span className={`insp-head__note${loop.note ? '' : ' is-empty'}`} title={loop.note}>
-              {loop.note || 'No context note'}
-            </span>
-          )}
+          {/* The line the row marquees — the first unchecked one in the checklist below. */}
+          <button
+            type="button"
+            className={`insp-head__note${loop.note ? '' : ' is-empty'}`}
+            title={loop.note ? `${loop.note} — the line this loop's row marquees` : 'Add the first line of this loop’s checklist (N)'}
+            onClick={addNote}
+          >
+            {loop.note || (loop.notes.length ? 'ALL NOTES CHECKED OFF' : 'No notes yet')}
+            {noteTail && <span className="insp-head__notecount">{noteTail}</span>}
+          </button>
         </div>
         <span className={`insp-head__timer${running ? ' is-running' : ''}`} aria-label={`Active time ${fmtHM(total)}`}>
           <TimerText ms={total} />
@@ -358,7 +374,9 @@ export function Inspector({ loop, now, docked = false, pending, keysEnabled, onD
           />
         </div>
       ) : (
-        <>
+        <div className="inspector__scroll">
+          <NotesPanel loop={loop} actions={actions.notes(loop.id)} focusAddSeq={focusNotes} />
+
           <DeadlinePanel
             loop={loop}
             now={now}
@@ -387,7 +405,7 @@ export function Inspector({ loop, now, docked = false, pending, keysEnabled, onD
         </span>
       </div>
 
-      <div className="inspector__scroll">
+      <div className="insp-sessions">
         {sessions?.error && !list.length ? (
           <div className="empty">COULDN’T LOAD SESSIONS — {sessions.error}</div>
         ) : !sessions && loop.sessionCount > 0 ? (
@@ -411,7 +429,7 @@ export function Inspector({ loop, now, docked = false, pending, keysEnabled, onD
           </ul>
         )}
       </div>
-        </>
+        </div>
       )}
     </section>
   );

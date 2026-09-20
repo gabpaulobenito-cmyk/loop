@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { modeFor } from '../../src/hooks/useViewport';
 
 /**
  * Post-deploy smoke test against the LIVE workspace.
@@ -15,6 +16,10 @@ const secsOf = (t: string) =>
     .reduce((total, part) => {
       if (part.endsWith('MO')) return total + Number(part.slice(0, -2)) * 30 * 86400;
       if (part.endsWith('D')) return total + Number(part.slice(0, -1)) * 86400;
+      if (part === '<1M') return total;
+      // "5H", "42M" or "5H42M" once whitespace is gone.
+      const coarse = part.match(/^(?:(\d+)H)?(?:(\d+)M)?$/);
+      if (coarse && (coarse[1] || coarse[2])) return total + Number(coarse[1] ?? 0) * 3600 + Number(coarse[2] ?? 0) * 60;
       return total + part.split(':').map(Number).reduce((a, n) => a * 60 + n, 0);
     }, 0);
 
@@ -46,34 +51,46 @@ test('live workspace loads, timers tick in sync, layouts hold (read-only)', asyn
   console.log(`loops: ${state.loops.length}, running (mine): ${running.length}, out: ${out.length}, filter: ${filter}`);
 
   if (out.length) {
-    // OUT clocks tick from the handoff time.
+    // OUT clocks read to the hour, counting from the handoff.
     const clock = page.locator(`[data-row="${out[0].id}"] .row__out`);
     await expect(clock).toBeVisible();
-    const t0 = secsOf((await clock.innerText()).replace('OUT', ''));
-    await expect.poll(async () => secsOf((await clock.innerText()).replace('OUT', '')), { timeout: 5000 }).toBeGreaterThanOrEqual(t0 + 2);
+    const shown = secsOf((await clock.innerText()).replace('OUT', ''));
+    const expected = Date.now() - out[0].handedOffAt!;
+    // Within an hour of the real figure: the row rounds down to whole hours.
+    expect(Math.abs(shown - Math.floor(expected / 1000))).toBeLessThanOrEqual(3600);
   }
 
   if (running.length) {
     const loop = running[0];
     const timer = page.locator(`[data-row="${loop.id}"] .row__timer`);
     await expect(timer).toBeVisible();
-    const first = secsOf(await timer.innerText());
-    await expect.poll(async () => secsOf(await timer.innerText()), { timeout: 5000 }).toBeGreaterThanOrEqual(first + 2);
 
     const fresh = await (await request.get('/api/state')).json();
     const l = fresh.loops.find((x: { id: string }) => x.id === loop.id);
     const serverElapsed = Math.floor((fresh.serverNow - l.runningSince + l.accumulatedMs) / 1000);
     const ui = secsOf(await timer.innerText());
     console.log(`timer ui=${await timer.innerText()} server=${serverElapsed}s`);
-    expect(Math.abs(ui - serverElapsed)).toBeLessThanOrEqual(2);
+    // The row rounds down to whole hours; it must still agree with the server.
+    expect(serverElapsed - ui).toBeGreaterThanOrEqual(0);
+    expect(serverElapsed - ui).toBeLessThanOrEqual(3600);
 
-    // Details open and close without changing anything.
+    // Details open without changing anything. Wide windows dock them as a column;
+    // narrower ones pop them up, so follow whatever this width does.
     await page.locator(`[data-row="${loop.id}"] .row__title`).click();
-    const dialog = page.getByRole('dialog', { name: 'Loop details' });
-    await expect(dialog).toBeVisible();
-    await expect(dialog.getByRole('list', { name: 'Session history' })).toBeVisible();
-    await page.keyboard.press('Escape');
-    await expect(dialog).toHaveCount(0);
+    const docked = modeFor(1024) === 'wide';
+    const details = docked ? page.locator(`[data-inspector="${loop.id}"]`) : page.getByRole('dialog', { name: 'Loop details' });
+    await expect(details).toBeVisible();
+    await expect(details.getByRole('list', { name: 'Session history' })).toBeVisible();
+
+    // Seconds live in the detail panel, and they tick.
+    const live = details.locator('.insp-head__timer');
+    const t0 = secsOf(await live.innerText());
+    await expect.poll(async () => secsOf(await live.innerText()), { timeout: 5000 }).toBeGreaterThanOrEqual(t0 + 2);
+    expect(Math.abs(secsOf(await live.innerText()) - serverElapsed)).toBeLessThanOrEqual(6);
+    if (!docked) {
+      await page.keyboard.press('Escape');
+      await expect(details).toHaveCount(0);
+    }
   }
 
   for (const width of WIDTHS) {

@@ -8,7 +8,18 @@ import { TimerText } from './TimerText';
  * has passed — how long it has been missed, counting up. The tier drives the
  * colour, from neutral a week out to red inside a day.
  */
-export function Countdown({ loop, now, className }: { loop: Loop; now: number; className?: string }) {
+export function Countdown({
+  loop,
+  now,
+  className,
+  coarse,
+}: {
+  loop: Loop;
+  now: number;
+  className?: string;
+  /** List rows stop at the hour; the detail panel keeps the full clock. */
+  coarse?: boolean;
+}) {
   const left = remainingMs(loop, now);
   if (left == null) return null;
   const over = left <= 0;
@@ -20,7 +31,7 @@ export function Countdown({ loop, now, className }: { loop: Loop; now: number; c
       title={over ? `Deadline passed — was due ${when}` : `Due ${when}`}
     >
       <span className="dl__label">{over ? 'OVER' : 'DUE'}</span>
-      <TimerText ms={Math.abs(left)} />
+      <TimerText ms={Math.abs(left)} coarse={coarse} />
     </span>
   );
 }

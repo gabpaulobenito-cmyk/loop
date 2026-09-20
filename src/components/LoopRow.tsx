@@ -19,6 +19,8 @@ export interface RowActions {
 interface Props {
   loop: Loop;
   variant: RowVariant;
+  /** Both worlds are on screen at once, so personal rows have to say so. */
+  markScope?: boolean;
   now: number;
   pending: boolean;
   selected: boolean;
@@ -45,7 +47,7 @@ function onRowKeyDown(e: KeyboardEvent<HTMLLIElement>) {
   target?.focus();
 }
 
-function LoopRowImpl({ loop, variant, now, pending, selected, actions }: Props) {
+function LoopRowImpl({ loop, variant, markScope = false, now, pending, selected, actions }: Props) {
   const { id, state, title, note, priority } = loop;
   const running = state === 'running';
   const closed = state === 'closed';
@@ -90,6 +92,12 @@ function LoopRowImpl({ loop, variant, now, pending, selected, actions }: Props) 
     </button>
   );
 
+  const scopeTag = markScope && loop.scope === 'personal' && (
+    <span className="row__scope" title="Personal">
+      PERS
+    </span>
+  );
+
   const ownerTag = out && (
     <span
       className="row__owner"
@@ -105,12 +113,36 @@ function LoopRowImpl({ loop, variant, now, pending, selected, actions }: Props) 
   const outClock = out && (
     <span className="row__out" data-owner={loop.owner} title="Time since handed off">
       <span className="row__outlabel">OUT</span>
-      <TimerText ms={now - (loop.handedOffAt ?? now)} />
+      <TimerText ms={now - (loop.handedOffAt ?? now)} coarse />
     </span>
   );
-  const deadline = countdown ? <Countdown loop={loop} now={now} className="row__dl" /> : null;
-  const timer = () => deadline ?? (out ? outClock : <TimerText className="row__timer" ms={total} />);
-  const ageLabel = deadline ?? (out ? outClock : <span className="row__age">{fmtAge(age)}</span>);
+  const deadline = countdown ? <Countdown loop={loop} now={now} className="row__dl" coarse /> : null;
+
+  /**
+   * A countdown row carries both clocks — your own time on the left, what you
+   * owe on the right: `1MO · 1D · 5H | DUE 8D · 5H`. The deadline alone would
+   * hide how long you have been carrying the thing.
+   */
+  // Out-of-hands loops show how long they have been out in place of your own time.
+  const ownTime = out ? (
+    outClock
+  ) : running ? (
+    <TimerText className="row__timer" ms={total} coarse />
+  ) : (
+    <span className="row__age">{fmtAge(age)}</span>
+  );
+  // Desk rows have room for the accumulated total beside a stopped loop's age.
+  const activeTime = !running && !out && !countdown && (
+    <span className="row__active" title="Active time">
+      {loop.accumulatedMs > 0 ? fmtHM(loop.accumulatedMs) : '—'}
+    </span>
+  );
+  const dueSeg = deadline && (
+    <>
+      <span className="row__div row__div--due" aria-hidden="true" />
+      {deadline}
+    </>
+  );
   const toggle = (size: 'xs' | 'sm' | 'md' | 'lg') => (
     <ToggleButton loop={loop} size={size} onToggle={() => actions.toggle(id)} onReopen={() => actions.reopen(id)} />
   );
@@ -134,18 +166,23 @@ function LoopRowImpl({ loop, variant, now, pending, selected, actions }: Props) 
         <div className="row__line">
           {marker}
           {titleBtn}
-          {running && timer()}
-          {state === 'open' && ageLabel}
+          {!closed && (deadline ?? ownTime)}
           {closed && <span className="row__closedat">{fmtAge(now - (loop.closedAt ?? now))}</span>}
           {toggle('xs')}
         </div>
         {out ? (
           <div className="row__subline">
+            {scopeTag}
             {ownerTag}
             {note && <Marquee className="row__note" text={note} />}
           </div>
         ) : (
-          note && !closed && <Marquee className="row__note" text={note} />
+          (scopeTag || (note && !closed)) && (
+            <div className="row__subline">
+              {scopeTag}
+              {note && !closed && <Marquee className="row__note" text={note} />}
+            </div>
+          )
         )}
       </li>
     );
@@ -157,16 +194,17 @@ function LoopRowImpl({ loop, variant, now, pending, selected, actions }: Props) 
         {marker}
         <div className="row__body">
           {titleBtn}
-          {(note || out) && (
+          {(note || out || scopeTag) && (
             <span className="row__note">
+              {scopeTag}
               {ownerTag}
               {out && note ? ' · ' : ''}
               {note}
             </span>
           )}
         </div>
-        {running && timer()}
-        {state === 'open' && ageLabel}
+        {!closed && ownTime}
+        {!closed && dueSeg}
         {closed && <span className="row__closedat">{fmtAge(now - (loop.closedAt ?? now))} ago</span>}
         {toggle('lg')}
       </li>
@@ -178,6 +216,7 @@ function LoopRowImpl({ loop, variant, now, pending, selected, actions }: Props) 
       <li {...common}>
         {marker}
         {titleBtn}
+        {scopeTag}
         <span className="row__active">{loop.accumulatedMs > 0 ? fmtHM(loop.accumulatedMs) : '—'}</span>
         <span className="row__closedat">{fmtAge(now - (loop.closedAt ?? now))} ago</span>
         {toggle('md')}
@@ -189,46 +228,34 @@ function LoopRowImpl({ loop, variant, now, pending, selected, actions }: Props) 
     <li {...common}>
       {marker}
       {titleBtn}
+      {scopeTag}
       {note && <span className="row__div" aria-hidden="true" />}
       {note ? <Marquee className="row__note" text={note} /> : <span className="row__note" />}
       {ownerTag}
       <span className="row__div" aria-hidden="true" />
-      {running && !deadline ? (
-        timer()
-      ) : (
-        <>
-          <span className="row__active" title="Active time">
-            {running ? fmtHM(total) : loop.accumulatedMs > 0 ? fmtHM(loop.accumulatedMs) : '—'}
-          </span>
-          {ageLabel}
-        </>
-      )}
+      {activeTime}
+      {ownTime}
+      {dueSeg}
       {toggle('md')}
     </li>
   );
 }
 
 /**
- * Open and closed rows only change once a minute, so they skip the per-second
- * re-render unless their minute bucket or data changes.
+ * Rows read their timers to the hour, so they skip the per-second re-render
+ * unless their minute bucket or their data changes.
  */
 export const LoopRow = memo(LoopRowImpl, (a, b) => {
   if (
     a.loop !== b.loop ||
     a.variant !== b.variant ||
+    a.markScope !== b.markScope ||
     a.pending !== b.pending ||
     a.selected !== b.selected ||
     a.actions !== b.actions
   ) {
     return false;
   }
-  // Running timers, countdowns and OUT clocks tick every second; the rest change once a minute.
-  if (
-    a.loop.state === 'running' ||
-    (a.loop.timerType === 'countdown' && a.loop.state !== 'closed') ||
-    (a.loop.owner !== 'mine' && a.loop.state !== 'closed')
-  ) {
-    return a.now === b.now;
-  }
+  // Rows stop at the hour, so they only need to re-render once a minute.
   return Math.floor(a.now / 60_000) === Math.floor(b.now / 60_000);
 });

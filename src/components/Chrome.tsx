@@ -1,6 +1,11 @@
 import { forwardRef, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, type RefObject } from 'react';
 import { fmtDateLabel, fmtHeaderClock, pad2 } from '../../shared/format';
+import type { Scope, ScopeView } from '../../shared/types';
+import { FITS } from '../lib/greeting';
+import { useGreeting } from '../hooks/useGreeting';
+import { useMedia } from '../hooks/useMedia';
 import type { Mode } from '../hooks/useViewport';
+import { DatePopup } from './DatePopup';
 
 const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
 export const MOD = isMac ? '⌘' : 'CTRL+';
@@ -54,12 +59,102 @@ export const SearchField = forwardRef<HTMLInputElement, SearchProps>(function Se
   );
 });
 
+// ── Scope switch ─────────────────────────────────────────────────────────────
+
+export interface ScopeCounts {
+  work: number;
+  personal: number;
+  /** Deadlines in their last day, or already past, per scope. */
+  fire: { work: number; personal: number };
+}
+
+export const SCOPE_ORDER: readonly ScopeView[] = ['work', 'personal', 'all'] as const;
+// `BOTH`, not `ALL`: the view bar's own filters already offer two ALLs, and this
+// one is not "every loop" — it is the deliberate look across both worlds at once.
+const SCOPE_LABEL: Record<ScopeView, string> = { work: 'WORK', personal: 'PERSONAL', all: 'BOTH' };
+const SCOPE_SHORT: Record<ScopeView, string> = { work: 'WORK', personal: 'PERS', all: 'BOTH' };
+export const SCOPE_OPTIONS = [
+  ['work', 'WORK'],
+  ['personal', 'PERSONAL'],
+  ['all', 'BOTH'],
+] as const;
+
+const scopeCount = (c: ScopeCounts, v: ScopeView) => (v === 'all' ? c.work + c.personal : c[v]);
+/** Fire-tier loops you would not see from `v` — the reason to look away from it. */
+const unseenFire = (c: ScopeCounts, v: ScopeView) =>
+  v === 'work' ? c.fire.personal : v === 'personal' ? c.fire.work : 0;
+
+interface ScopeSwitchProps {
+  value: ScopeView;
+  counts: ScopeCounts;
+  onChange: (v: ScopeView) => void;
+  /** `full` is the three-segment control; `mini` is the one-button cycle for narrow bars. */
+  variant?: 'full' | 'mini';
+}
+
+/**
+ * Which world the workspace is in. Not a filter: it also decides what a new loop
+ * is born into, so it stays visible at every width. Whichever scope you are not
+ * looking at still reports its own fire-tier count, so a personal deadline can
+ * never go red unseen behind the work list.
+ */
+export function ScopeSwitch({ value, counts, onChange, variant = 'full' }: ScopeSwitchProps) {
+  if (variant === 'mini') {
+    const next = SCOPE_ORDER[(SCOPE_ORDER.indexOf(value) + 1) % SCOPE_ORDER.length];
+    const fire = unseenFire(counts, value);
+    return (
+      <button
+        type="button"
+        className="scope scope--mini"
+        data-scope={value}
+        title={`Showing ${SCOPE_LABEL[value]} — switch to ${SCOPE_LABEL[next]} (W)`}
+        aria-label={`Scope ${SCOPE_LABEL[value]}. Switch to ${SCOPE_LABEL[next]}`}
+        onClick={() => onChange(next)}
+      >
+        {SCOPE_SHORT[value]}
+        <span className="scope__n">{pad2(scopeCount(counts, value))}</span>
+        {fire > 0 && (
+          <span className="scope__fire" title={`${fire} due in the other scope`}>
+            {fire}
+          </span>
+        )}
+      </button>
+    );
+  }
+  return (
+    <span className="scope" role="group" aria-label="Work or personal">
+      {SCOPE_ORDER.map((v) => {
+        // The badge means "you cannot see this from where you are", so it is
+        // silent on the scope you are in — and on every scope while in BOTH.
+        const fire = value === 'all' || v === value || v === 'all' ? 0 : counts.fire[v];
+        return (
+          <button
+            key={v}
+            type="button"
+            className="scope__opt"
+            data-scope={v}
+            aria-pressed={value === v}
+            title={v === 'all' ? 'Both worlds at once — new loops land in work (W)' : `Show ${SCOPE_LABEL[v]} — new loops land here (W)`}
+            onClick={() => onChange(v)}
+          >
+            {SCOPE_LABEL[v]}
+            <span className="scope__n">{pad2(scopeCount(counts, v))}</span>
+            {fire > 0 && (
+              <span className="scope__fire" title={`${fire} due here`}>
+                {fire}
+              </span>
+            )}
+          </button>
+        );
+      })}
+    </span>
+  );
+}
+
 // ── Header ───────────────────────────────────────────────────────────────────
 
 interface HeaderProps {
   mode: Mode;
-  runCount: number;
-  openCount: number;
   anyRunning: boolean;
   search: ReactNode;
   onNew: () => void;
@@ -81,11 +176,24 @@ function HeaderClock({ now }: { now: number }) {
   );
 }
 
-export function Header({ mode, runCount, openCount, anyRunning, search, onNew, menuOpen, onMenu, menuButtonRef, now, onSearch }: HeaderProps) {
+export function Header({ mode, anyRunning, search, onNew, menuOpen, onMenu, menuButtonRef, now, onSearch }: HeaderProps) {
+  // The greeting takes whatever the clock, search and buttons leave: the whole
+  // line where there is room, the name dropped where there isn't, and only the
+  // shortest lines on the rail. Phones get the whole line too — they show no
+  // clock here, because iOS and Android are already showing one just above.
+  const rail = mode === 'rail';
+  const phone = mode === 'mobile';
+  const roomy = useMedia('(min-width: 900px)') && !rail && !phone;
+  const greeting = useGreeting(now, rail ? FITS.rail : roomy ? FITS.full : FITS.phone);
+  const line = rail ? greeting.short : roomy || phone ? greeting.full : greeting.short;
+  // The workspace belongs to one person, so it says hello instead of stating its
+  // own name. The dot still carries the only status the header needs: is anything running.
   const brand = (
     <span className="hdr__brand">
       <span className={`marker ${anyRunning ? 'marker--running' : 'marker--open'}`} aria-hidden="true" />
-      <h1 className="hdr__word" style={{ margin: 0 }}>LOOP</h1>
+      <h1 className="hdr__greet" style={{ margin: 0 }} title={greeting.full}>
+        {line}
+      </h1>
     </span>
   );
   const more = (
@@ -101,17 +209,11 @@ export function Header({ mode, runCount, openCount, anyRunning, search, onNew, m
       ⋯
     </button>
   );
-  const total = runCount + openCount;
-
   if (mode === 'rail') {
     return (
       <header className="hdr hdr--rail">
         {brand}
         <span className="hdr__spacer" />
-        <span className="hdr__total" title={`${runCount} running · ${openCount} open`}>
-          <span className="sr-only">{runCount} running, {openCount} open, total </span>
-          {pad2(total)}
-        </span>
         <button type="button" className="btn-new hit" title={`NEW LOOP — ${MOD}N`} aria-label="New loop" onClick={onNew}>
           <span className="btn-new__plus" aria-hidden="true">+</span>
           <span className="btn-new__label">NEW</span>
@@ -125,11 +227,7 @@ export function Header({ mode, runCount, openCount, anyRunning, search, onNew, m
     return (
       <header className="hdr hdr--mobile">
         {brand}
-        <span className="hdr__total" aria-label={`${runCount} running of ${total}`}>
-          {pad2(runCount)}/{pad2(total)}
-        </span>
         <span className="hdr__spacer" />
-        <HeaderClock now={now} />
         <button type="button" className="btn-more btn-search" aria-label="Search loops" onClick={onSearch}>
           <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
             <circle cx="6.75" cy="6.75" r="4.75" />
@@ -147,10 +245,6 @@ export function Header({ mode, runCount, openCount, anyRunning, search, onNew, m
   return (
     <header className="hdr">
       {brand}
-      <div className="hdr__counts">
-        <span className="c-run">RUNNING {pad2(runCount)}</span>
-        <span className="c-open">OPEN {pad2(openCount)}</span>
-      </div>
       <span className="hdr__spacer" />
       <HeaderClock now={now} />
       {search}
@@ -164,65 +258,13 @@ export function Header({ mode, runCount, openCount, anyRunning, search, onNew, m
   );
 }
 
-// ── Inline capture bar (desk) ────────────────────────────────────────────────
-
-interface CaptureBarProps {
-  inputRef: RefObject<HTMLInputElement | null>;
-  onCreate: (text: string, start: boolean) => Promise<unknown>;
-}
-
-export function CaptureBar({ inputRef, onCreate }: CaptureBarProps) {
-  const [text, setText] = useState('');
-  const has = text.trim().length > 0;
-  const submit = (start: boolean) => {
-    if (!has) return;
-    const value = text;
-    setText('');
-    void onCreate(value, start);
-    inputRef.current?.focus();
-  };
-  return (
-    <div className="capbar" onClick={() => inputRef.current?.focus()}>
-      <span className="capbar__prompt" aria-hidden="true">&gt;</span>
-      <input
-        ref={inputRef}
-        type="text"
-        aria-label="New loop title. Enter creates open, Shift+Enter creates and starts. Use // to add a note."
-        placeholder="What are you starting?"
-        autoComplete="off"
-        enterKeyHint="done"
-        maxLength={420}
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
-            e.preventDefault();
-            submit(e.shiftKey);
-          } else if (e.key === 'Escape') {
-            e.stopPropagation();
-            setText('');
-            inputRef.current?.blur();
-          }
-        }}
-      />
-      <span className="capbar__hint">
-        <button type="button" className="capbar__act" disabled={!has} onClick={(e) => { e.stopPropagation(); submit(false); }}>
-          <kbd style={{ font: 'inherit' }}>⏎</kbd> OPEN
-        </button>
-        <span aria-hidden="true">·</span>
-        <button type="button" className="capbar__act capbar__act--start" disabled={!has} onClick={(e) => { e.stopPropagation(); submit(true); }}>
-          <kbd style={{ font: 'inherit' }}>⇧⏎</kbd> START
-        </button>
-      </span>
-    </div>
-  );
-}
-
 // ── New loop pop-up ──────────────────────────────────────────────────────────
 
 interface CaptureDialogProps {
   onClose: () => void;
-  onCreate: (title: string, note: string, start: boolean, deadlineAt: number | null) => Promise<unknown>;
+  /** The world the workspace is in; `all` has no side to pick, so capture defaults to work. */
+  scope: ScopeView;
+  onCreate: (title: string, note: string, start: boolean, deadlineAt: number | null, scope: Scope) => Promise<unknown>;
 }
 
 /** 17:00 local, `days` days from today — end of the working day the work is due. */
@@ -230,9 +272,9 @@ function eveningIn(days: number, now = Date.now()) {
   const d = new Date(now);
   return new Date(d.getFullYear(), d.getMonth(), d.getDate() + days, 17, 0).getTime();
 }
-const toDateInput = (t: number) => {
-  const d = new Date(t);
-  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+const eveningOn = (dayStart: number) => {
+  const d = new Date(dayStart);
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 17, 0).getTime();
 };
 
 /** Grow a textarea to fit its content. */
@@ -246,12 +288,15 @@ function autosize(el: HTMLTextAreaElement | null) {
  * Centered pop-up for starting a loop: large title, optional note, and a start
  * button. Enter creates the loop and starts its timer; ⇧⏎ adds it without starting.
  */
-export function CaptureDialog({ onClose, onCreate }: CaptureDialogProps) {
+export function CaptureDialog({ onClose, scope, onCreate }: CaptureDialogProps) {
   const [title, setTitle] = useState('');
   const [note, setNote] = useState('');
+  // Pre-set from the scope you are in, so the common case needs no decision.
+  const [into, setInto] = useState<Scope>(scope === 'personal' ? 'personal' : 'work');
   // A deadline is opt-in: most loops age, only some are owed to someone by a date.
   const [hasDeadline, setHasDeadline] = useState(false);
   const [deadlineAt, setDeadlineAt] = useState<number | null>(null);
+  const [calOpen, setCalOpen] = useState(false);
   const titleRef = useRef<HTMLTextAreaElement>(null);
   const noteRef = useRef<HTMLTextAreaElement>(null);
   const submitted = useRef(false);
@@ -274,7 +319,7 @@ export function CaptureDialog({ onClose, onCreate }: CaptureDialogProps) {
     }
     if (submitted.current) return;
     submitted.current = true;
-    void onCreate(title, note, start, hasDeadline ? deadlineAt : null);
+    void onCreate(title, note, start, hasDeadline ? deadlineAt : null, into);
     onClose();
   };
 
@@ -296,6 +341,20 @@ export function CaptureDialog({ onClose, onCreate }: CaptureDialogProps) {
         <div className="term-bar">
           <span className="marker marker--running" aria-hidden="true" />
           <h2 id="capture-heading" className="term-bar__path">LOOP // NEW</h2>
+          <span className="capture__scope" role="group" aria-label="Work or personal">
+            {(['work', 'personal'] as const).map((v) => (
+              <button
+                key={v}
+                type="button"
+                className="capture__scopeopt"
+                data-scope={v}
+                aria-pressed={into === v}
+                onClick={() => setInto(v)}
+              >
+                {v === 'work' ? 'WORK' : 'PERSONAL'}
+              </button>
+            ))}
+          </span>
           <span className="hdr__spacer" />
           <button type="button" className="term-bar__esc" onClick={onClose} aria-label="Cancel">
             ESC ✕
@@ -354,6 +413,7 @@ export function CaptureDialog({ onClose, onCreate }: CaptureDialogProps) {
                 onClick={() => {
                   setHasDeadline(false);
                   setDeadlineAt(null);
+                  setCalOpen(false);
                 }}
               >
                 NO · IT AGES
@@ -364,7 +424,11 @@ export function CaptureDialog({ onClose, onCreate }: CaptureDialogProps) {
                 aria-checked={hasDeadline}
                 className="capture__opt"
                 data-yes="true"
-                onClick={() => setHasDeadline(true)}
+                onClick={() => {
+                  setHasDeadline(true);
+                  // Saying yes means picking the date, so the calendar is already there.
+                  if (deadlineAt == null) setCalOpen(true);
+                }}
               >
                 YES · COUNT DOWN
               </button>
@@ -379,22 +443,41 @@ export function CaptureDialog({ onClose, onCreate }: CaptureDialogProps) {
                     ['NEXT WEEK', 7],
                   ] as const
                 ).map(([label, days]) => (
-                  <button key={label} type="button" className="capture__chip" onClick={() => setDeadlineAt(eveningIn(days))}>
+                  <button
+                    key={label}
+                    type="button"
+                    className="capture__chip"
+                    onClick={() => {
+                      setDeadlineAt(eveningIn(days));
+                      setCalOpen(false);
+                    }}
+                  >
                     {label}
                   </button>
                 ))}
-                <input
-                  type="date"
-                  className="capture__chip capture__date"
-                  aria-label="Deadline date"
-                  value={deadlineAt != null ? toDateInput(deadlineAt) : ''}
-                  onChange={(e) => {
-                    if (!e.target.value) return setDeadlineAt(null);
-                    const [y, m, d] = e.target.value.split('-').map(Number);
-                    setDeadlineAt(new Date(y, m - 1, d, 17, 0).getTime());
-                  }}
-                />
+                <button
+                  type="button"
+                  className="capture__chip capture__datebtn"
+                  aria-expanded={calOpen}
+                  aria-label={deadlineAt != null ? `Deadline ${fmtDateLabel(deadlineAt)} — pick another date` : 'Pick a deadline date'}
+                  onClick={() => setCalOpen((v) => !v)}
+                >
+                  {deadlineAt != null ? fmtDateLabel(deadlineAt) : 'PICK A DATE'}
+                  <span className="capture__caret" aria-hidden="true">{calOpen ? '▴' : '▾'}</span>
+                </button>
               </div>
+            )}
+            {hasDeadline && calOpen && (
+              <DatePopup
+                title="LOOP // DEADLINE"
+                value={deadlineAt}
+                now={Date.now()}
+                onPick={(day) => {
+                  setDeadlineAt(eveningOn(day));
+                  setCalOpen(false);
+                }}
+                onClose={() => setCalOpen(false)}
+              />
             )}
             {hasDeadline && (
               <span className={`capture__due${needsDate ? ' is-missing' : ''}`} role="status">

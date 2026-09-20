@@ -21,7 +21,7 @@ function makeAgent(p: Pool) {
 const post = (path: string, body?: object) => agent.post(path).set('x-loop-client', '1').send(body ?? {});
 const patch = (path: string, body: object) => agent.patch(path).set('x-loop-client', '1').send(body);
 
-async function create(title: string, opts: { start?: boolean; note?: string } = {}): Promise<Loop> {
+async function create(title: string, opts: { start?: boolean; note?: string; scope?: 'work' | 'personal' } = {}): Promise<Loop> {
   const res = await post('/api/loops', { id: randomUUID(), title, ...opts }).expect(201);
   return res.body.loop;
 }
@@ -209,6 +209,74 @@ describe('priority and edits', () => {
     expect(r.body.loop).toMatchObject({ title: 'Final', note: 'Ready for review' });
     await patch(`/api/loops/${l.id}`, { title: '' }).expect(400);
     await patch(`/api/loops/${l.id}`, {}).expect(400);
+  });
+});
+
+describe('notes checklist', () => {
+  const note = (text: string, done = false) => ({ id: randomUUID(), text, done });
+  const texts = (l: Loop) => l.notes.map((n) => n.text);
+
+  it('captures the first note as the first line of the checklist', async () => {
+    const l = await create('Investor Update', { note: 'September metrics' });
+    expect(l.notes).toMatchObject([{ text: 'September metrics', done: false }]);
+    expect(l.note).toBe('September metrics');
+  });
+
+  it('reads the first unchecked line, and moves on when it is checked off', async () => {
+    const l = await create('Investor Update');
+    const a = note('pull the numbers');
+    const b = note('write the summary');
+    let r = await patch(`/api/loops/${l.id}`, { notes: [a, b] }).expect(200);
+    expect(r.body.loop.note).toBe('pull the numbers');
+
+    r = await patch(`/api/loops/${l.id}`, { notes: [{ ...a, done: true }, b] }).expect(200);
+    expect(r.body.loop.note).toBe('write the summary');
+    // Checked lines stay where they were put.
+    expect(texts(r.body.loop)).toEqual(['pull the numbers', 'write the summary']);
+
+    r = await patch(`/api/loops/${l.id}`, { notes: [{ ...a, done: true }, { ...b, done: true }] }).expect(200);
+    expect(r.body.loop.note).toBe('');
+  });
+
+  it('rearranging the list is what chooses the line the row reads', async () => {
+    const l = await create('Investor Update');
+    const a = note('pull the numbers');
+    const b = note('write the summary');
+    await patch(`/api/loops/${l.id}`, { notes: [a, b] }).expect(200);
+    const r = await patch(`/api/loops/${l.id}`, { notes: [b, a] }).expect(200);
+    expect(texts(r.body.loop)).toEqual(['write the summary', 'pull the numbers']);
+    expect(r.body.loop.note).toBe('write the summary');
+    expect(r.body.undo.label).toMatch(/^Edited notes on/);
+  });
+
+  it('cleans each line, drops blanks and refuses an oversized list', async () => {
+    const l = await create('Investor Update');
+    const r = await patch(`/api/loops/${l.id}`, {
+      notes: [note('  pull \n the numbers '), note('   '), note('write the summary')],
+    }).expect(200);
+    expect(texts(r.body.loop)).toEqual(['pull the numbers', 'write the summary']);
+    const many = Array.from({ length: 21 }, (_, i) => note(`line ${i}`));
+    await patch(`/api/loops/${l.id}`, { notes: many }).expect(400);
+  });
+
+  it('a legacy note patch rewrites the active line and leaves the rest alone', async () => {
+    const l = await create('Investor Update');
+    const a = note('pull the numbers', true);
+    const b = note('write the summary');
+    await patch(`/api/loops/${l.id}`, { notes: [a, b] }).expect(200);
+    const r = await patch(`/api/loops/${l.id}`, { note: 'write the summary today' }).expect(200);
+    expect(texts(r.body.loop)).toEqual(['pull the numbers', 'write the summary today']);
+  });
+
+  it('undo puts the whole checklist back', async () => {
+    const l = await create('Investor Update');
+    const a = note('pull the numbers');
+    const b = note('write the summary');
+    await patch(`/api/loops/${l.id}`, { notes: [a, b] }).expect(200);
+    await patch(`/api/loops/${l.id}`, { notes: [{ ...b, done: true }] }).expect(200);
+    const r = await post('/api/undo').expect(200);
+    expect(texts(r.body.loop)).toEqual(['pull the numbers', 'write the summary']);
+    expect(r.body.loop.note).toBe('pull the numbers');
   });
 });
 
@@ -611,5 +679,73 @@ describe('deadlines', () => {
     const res = await agent.put('/api/settings').set('x-loop-client', '1').send({ timerFilter: 'deadline' }).expect(200);
     expect(res.body.settings.timerFilter).toBe('deadline');
     await agent.put('/api/settings').set('x-loop-client', '1').send({ timerFilter: 'someday' }).expect(400);
+  });
+});
+
+
+describe('work / personal scope', () => {
+  it('is born into work unless the client says otherwise', async () => {
+    const l = await create('quarterly review');
+    expect(l.scope).toBe('work');
+  });
+
+  it('captures into personal when that is the scope', async () => {
+    const l = await create('book the dentist', { scope: 'personal' });
+    expect(l.scope).toBe('personal');
+    const state = await agent.get('/api/state').expect(200);
+    expect(state.body.loops.find((x: Loop) => x.id === l.id).scope).toBe('personal');
+  });
+
+  it('rejects a scope that is neither', async () => {
+    await post('/api/loops', { id: randomUUID(), title: 'x', scope: 'side-project' }).expect(400);
+    const l = await create('x');
+    await patch(`/api/loops/${l.id}`, { scope: 'errands' }).expect(400);
+  });
+
+  it('moves a loop between worlds and back', async () => {
+    const l = await create('pay the tax bill');
+    const moved = await patch(`/api/loops/${l.id}`, { scope: 'personal' }).expect(200);
+    expect(moved.body.loop.scope).toBe('personal');
+    expect(moved.body.undo.label).toMatch(/personal/i);
+
+    const back = await patch(`/api/loops/${l.id}`, { scope: 'work' }).expect(200);
+    expect(back.body.loop.scope).toBe('work');
+  });
+
+  it('undoes a move, putting the loop back where it was', async () => {
+    const l = await create('book the dentist', { scope: 'personal' });
+    await patch(`/api/loops/${l.id}`, { scope: 'work' }).expect(200);
+    const undone = await post('/api/undo').expect(200);
+    expect(undone.body.loop.scope).toBe('personal');
+  });
+
+  it('keeps the scope through the rest of a loop\u2019s life', async () => {
+    const l = await create('renew the passport', { scope: 'personal', start: true });
+    clock.advance(30 * M);
+    await post(`/api/loops/${l.id}/stop`).expect(200);
+    const closed = await post(`/api/loops/${l.id}/close`).expect(200);
+    expect(closed.body.loop.scope).toBe('personal');
+    const reopened = await post(`/api/loops/${l.id}/reopen`).expect(200);
+    expect(reopened.body.loop.scope).toBe('personal');
+  });
+
+  it('reports no change when the scope is already that', async () => {
+    const l = await create('x');
+    const res = await patch(`/api/loops/${l.id}`, { scope: 'work' }).expect(200);
+    expect(res.body.loop.scope).toBe('work');
+    expect(res.body.undo?.label).not.toMatch(/moved/i);
+  });
+
+  it('moves a loop without disturbing its timer, owner or deadline', async () => {
+    const l = await create('ship the deck', { start: true });
+    clock.advance(2 * H);
+    await patch(`/api/loops/${l.id}`, { owner: 'delegated', ownerWith: 'Sam' }).expect(200);
+    await patch(`/api/loops/${l.id}`, { deadlineAt: clock.now() + 3 * 24 * H }).expect(200);
+    const moved = await patch(`/api/loops/${l.id}`, { scope: 'personal' }).expect(200);
+    expect(moved.body.loop.scope).toBe('personal');
+    expect(moved.body.loop.state).toBe('running');
+    expect(moved.body.loop.owner).toBe('delegated');
+    expect(moved.body.loop.ownerWith).toBe('Sam');
+    expect(moved.body.loop.timerType).toBe('countdown');
   });
 });

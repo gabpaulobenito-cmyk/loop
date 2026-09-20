@@ -1,28 +1,32 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { fmtHM, fmtTimer, pad2 } from '../../shared/format';
 import { elapsedMs, hoistFireTier, isFireTier, sortClosed, sortOpen, sortRunning } from '../../shared/timer';
-import type { Loop, OpenSort, RunSort, ThemePref } from '../../shared/types';
+import type { Loop, OpenSort, RunSort, ScopeView, ThemePref } from '../../shared/types';
 import { useNow } from '../hooks/useNow';
 import { useStore } from '../hooks/useStore';
 import { useMode, type Mode } from '../hooks/useViewport';
 import { store } from '../lib/store';
 import {
-  CaptureBar,
   CaptureDialog,
   Header,
   MOD,
   MenuPopover,
   OPEN_SORTS,
   RUN_SORTS,
+  SCOPE_OPTIONS,
+  SCOPE_ORDER,
+  ScopeSwitch,
   SearchField,
   SortButtons,
   TIMER_FILTERS,
+  type ScopeCounts,
 } from './Chrome';
 import { Inspector, type InspectorActions } from './Inspector';
 import { LoopRow, type RowActions, type RowVariant } from './LoopRow';
 
 type Tab = 'all' | 'running' | 'open' | 'closed';
 const TAB_KEY = 'loop.tab';
+const SCOPE_KEY = 'loop.scope';
 const WEEK = 7 * 86_400_000;
 
 function readTab(): Tab {
@@ -33,6 +37,21 @@ function readTab(): Tab {
     // ignore
   }
   return 'all';
+}
+
+/**
+ * Which world this device is in. Deliberately per-device rather than synced with
+ * the other filters: the phone can sit in PERSONAL for good while the work
+ * machine stays in WORK. Work is the default — that is what LOOP started as.
+ */
+function readScope(): ScopeView {
+  try {
+    const v = localStorage.getItem(SCOPE_KEY);
+    if (v === 'work' || v === 'personal' || v === 'all') return v;
+  } catch {
+    // ignore
+  }
+  return 'work';
 }
 
 const isTyping = (el: EventTarget | null) =>
@@ -50,13 +69,13 @@ export function Workspace() {
   const [query, setQuery] = useState('');
   const [searchOpen, setSearchOpen] = useState(false);
   const [tab, setTabState] = useState<Tab>(readTab);
+  const [scope, setScopeState] = useState<ScopeView>(readScope);
   const [captureOpen, setCaptureOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [overlay, setOverlay] = useState(false);
 
   const searchRef = useRef<HTMLInputElement>(null);
-  const captureRef = useRef<HTMLInputElement>(null);
   const menuBtnRef = useRef<HTMLButtonElement>(null);
 
   const setTab = (t: Tab) => {
@@ -68,6 +87,15 @@ export function Workspace() {
     }
   };
 
+  const setScope = useCallback((v: ScopeView) => {
+    setScopeState(v);
+    try {
+      localStorage.setItem(SCOPE_KEY, v);
+    } catch {
+      // ignore
+    }
+  }, []);
+
   // ── Derived lists ────────────────────────────────────────────────────────
   const q = query.trim().toLowerCase();
   const { settings } = s;
@@ -75,20 +103,35 @@ export function Workspace() {
   const timerFilter = settings.timerFilter;
   const matches = useCallback(
     (l: Loop) =>
+      (scope === 'all' || l.scope === scope) &&
       (ownerFilter === 'all' || (ownerFilter === 'mine' ? l.owner === 'mine' : l.owner !== 'mine')) &&
       (timerFilter === 'all' || (timerFilter === 'deadline' ? l.timerType === 'countdown' : l.timerType === 'elapsed')) &&
       (!q ||
         l.title.toLowerCase().includes(q) ||
-        l.note.toLowerCase().includes(q) ||
+        l.notes.some((n) => n.text.toLowerCase().includes(q)) ||
         l.ownerWith.toLowerCase().includes(q)),
-    [q, ownerFilter, timerFilter],
+    [q, scope, ownerFilter, timerFilter],
   );
 
-  const allRunning = s.loops.filter((l) => l.state === 'running');
-  const allOpen = s.loops.filter((l) => l.state === 'open');
+  // Everything below the switch is already inside the current scope, so the
+  // tabs, totals and section counts all speak about the world you are looking at.
+  const inScope = useCallback((l: Loop) => scope === 'all' || l.scope === scope, [scope]);
+  const allRunning = s.loops.filter((l) => l.state === 'running' && inScope(l));
+  const allOpen = s.loops.filter((l) => l.state === 'open' && inScope(l));
   const running = sortRunning(allRunning.filter(matches), settings.runSort, now);
   const open = sortOpen(allOpen.filter(matches), settings.openSort, now);
   const closedAll = sortClosed(s.loops.filter((l) => l.state === 'closed' && matches(l)));
+  // The switch itself counts across both worlds — including the fire tier of the
+  // one you are not in, so a personal deadline can't go red behind the work list.
+  const liveAll = s.loops.filter((l) => l.state === 'running' || l.state === 'open');
+  const scopeCounts: ScopeCounts = {
+    work: liveAll.filter((l) => l.scope === 'work').length,
+    personal: liveAll.filter((l) => l.scope === 'personal').length,
+    fire: {
+      work: liveAll.filter((l) => l.scope === 'work' && isFireTier(l, now)).length,
+      personal: liveAll.filter((l) => l.scope === 'personal' && isFireTier(l, now)).length,
+    },
+  };
   const closed = q || settings.archiveRange === 'all' ? closedAll : closedAll.filter((l) => (l.closedAt ?? 0) > now - WEEK);
   const prioCount = [...allRunning, ...allOpen].filter((l) => l.priority).length;
   const totalActive = [...allRunning, ...allOpen].reduce((a, l) => a + elapsedMs(l, now), 0);
@@ -118,16 +161,16 @@ export function Workspace() {
   // The docked column always shows something useful.
   useEffect(() => {
     if (!wide || s.load !== 'ready') return;
-    if (selectedId && s.loops.some((l) => l.id === selectedId)) return;
+    if (selectedId && s.loops.some((l) => l.id === selectedId && inScope(l))) return;
     const first = sortRunning(allRunning, settings.runSort, now)[0] ?? sortOpen(allOpen, settings.openSort, now)[0];
     setSelectedId(first?.id ?? null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [wide, s.load, s.loops, selectedId]);
+  }, [wide, s.load, s.loops, selectedId, scope]);
 
   // Close the pop-up if its loop disappears, or once the window is wide enough to dock.
   useEffect(() => {
-    if (overlay && (!selected || wide)) setOverlay(false);
-  }, [overlay, selected, wide]);
+    if (overlay && (!selected || wide || !inScope(selected))) setOverlay(false);
+  }, [overlay, selected, wide, inScope]);
 
   // ── Actions (stable references keep memoized rows cheap) ────────────────
   const rowActions = useMemo<RowActions>(
@@ -150,10 +193,18 @@ export function Workspace() {
       close: (id) => void store.close(id),
       priority: (id) => void store.togglePriority(id),
       edit: (id, patch) => store.edit(id, patch),
+      notes: (id) => ({
+        add: (text) => void store.addNote(id, text),
+        edit: (noteId, text) => void store.editNote(id, noteId, text),
+        toggle: (noteId) => void store.toggleNote(id, noteId),
+        move: (noteId, to) => void store.moveNote(id, noteId, to),
+        remove: (noteId) => void store.removeNote(id, noteId),
+      }),
       retime: (id, at, kept) => void store.retime(id, at, kept),
       handoff: (id, patch) => void store.handoff(id, patch),
       setDeadline: (id, at) => void store.setDeadline(id, at),
       dropDeadline: (id) => void store.dropDeadline(id),
+      setScope: (id, v) => void store.setScope(id, v),
       remove: (id) => {
         setOverlay(false);
         void store.remove(id);
@@ -178,12 +229,6 @@ export function Workspace() {
     });
   }, [compact]);
 
-  const createFromBar = useCallback(async (text: string, start: boolean) => {
-    const id = await store.create(text, start);
-    if (id && start && mode === 'mobile' && tab === 'open') setTab('running');
-    return id;
-  }, [mode, tab]);
-
   // ── Global keyboard shortcuts ───────────────────────────────────────────
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -206,6 +251,10 @@ export function Workspace() {
         e.preventDefault();
         return openNew();
       }
+      if (!mod && !e.shiftKey && k === 'w') {
+        e.preventDefault();
+        return setScope(SCOPE_ORDER[(SCOPE_ORDER.indexOf(scope) + 1) % SCOPE_ORDER.length]);
+      }
       if (!mod && e.key === '/') {
         e.preventDefault();
         return openSearch();
@@ -217,7 +266,7 @@ export function Workspace() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [menuOpen, captureOpen, overlay, mode, compact, searchOpen, query, openNew, openSearch]);
+  }, [menuOpen, captureOpen, overlay, mode, compact, searchOpen, query, openNew, openSearch, scope, setScope]);
 
   // ── Rendering helpers ───────────────────────────────────────────────────
   const rows = (list: Loop[], label: string) => (
@@ -227,6 +276,7 @@ export function Workspace() {
           key={l.id}
           loop={l}
           variant={rowVariant}
+          markScope={scope === 'all'}
           now={now}
           pending={!!s.pending[l.id]}
           selected={inspectorVisible && l.id === selectedId}
@@ -486,6 +536,10 @@ export function Workspace() {
       )}
       {compact && (
         <>
+          <div className="menu__group">SCOPE</div>
+          <div className="menu__opts">
+            <SortButtons label="Work or personal" options={SCOPE_OPTIONS} value={scope} onChange={setScope} />
+          </div>
           <div className="menu__group">TIMER</div>
           <div className="menu__opts">
             <SortButtons
@@ -534,6 +588,7 @@ export function Workspace() {
           <div className="menu__keys">
             <kbd>N</kbd><span>NEW LOOP</span>
             <kbd>⇧⏎</kbd><span>CREATE + START</span>
+            <kbd>W</kbd><span>WORK / PERSONAL / BOTH</span>
             <kbd>/ {MOD}K</kbd><span>SEARCH</span>
             <kbd>{MOD}Z</kbd><span>UNDO</span>
             <kbd>↑ ↓</kbd><span>MOVE BETWEEN ROWS</span>
@@ -562,6 +617,10 @@ export function Workspace() {
     </MenuPopover>
   );
 
+  const scopeSwitch = (
+    <ScopeSwitch value={scope} counts={scopeCounts} onChange={setScope} variant={compact ? 'mini' : 'full'} />
+  );
+
   const searchField = (
     <SearchField
       ref={searchRef}
@@ -575,6 +634,8 @@ export function Workspace() {
 
   const viewBar = (
     <div className={`viewbar viewbar--${mode}`} aria-label="Filters">
+      {scopeSwitch}
+      <span className="viewbar__div viewbar__div--scope" aria-hidden="true" />
       <span className="viewbar__group" role="group" aria-label="Filter by who is moving it">
         {mode !== 'rail' && <span className="viewbar__label">VIEW</span>}
         {(
@@ -660,8 +721,6 @@ export function Workspace() {
     <div className="app" data-mode={mode}>
       <Header
         mode={mode}
-        runCount={allRunning.length}
-        openCount={allOpen.length}
         anyRunning={allRunning.length > 0}
         search={searchField}
         onNew={openNew}
@@ -671,7 +730,6 @@ export function Workspace() {
         now={now}
         onSearch={() => (searchOpen && !query ? setSearchOpen(false) : openSearch())}
       />
-      {(mode === 'desk' || mode === 'wide') && <CaptureBar inputRef={captureRef} onCreate={createFromBar} />}
       {(mode === 'desk' || mode === 'wide' || mode === 'rail') && viewBar}
       {compact && (searchOpen || q) && (
         <div className={`searchrow${mode === 'rail' ? ' searchrow--rail' : ''}`}>{searchField}</div>
@@ -712,8 +770,12 @@ export function Workspace() {
       {captureOpen && (
         <CaptureDialog
           onClose={() => setCaptureOpen(false)}
-          onCreate={async (title, note, start, deadlineAt) => {
-            const id = await store.create(title, start, note, deadlineAt);
+          scope={scope}
+          onCreate={async (title, note, start, deadlineAt, into) => {
+            // Capturing into the world you are not looking at would file the loop
+            // out of sight, so the workspace follows the choice you just made.
+            if (scope !== 'all' && into !== scope) setScope(into);
+            const id = await store.create(title, start, note, deadlineAt, into);
             if (id && mode === 'mobile' && tab !== 'all' && tab !== (start ? 'running' : 'open')) setTab('all');
           }}
         />

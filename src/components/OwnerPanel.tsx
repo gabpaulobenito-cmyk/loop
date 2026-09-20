@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { WITH_MAX, type Loop, type Owner } from '../../shared/types';
-import { pad2 } from '../../shared/format';
+import { fmtDateLabel } from '../../shared/format';
+import { DatePopup } from './DatePopup';
 import { TimerText } from './TimerText';
 
 export interface HandoffPatch {
@@ -16,28 +17,25 @@ interface Props {
 }
 
 const DAY = 86_400_000;
-const WEEKDAYS = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
-const MONTHS = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
 
 /** 09:00 local time, `days` days from today. */
 function morningIn(days: number, now: number) {
   const d = new Date(now);
   return new Date(d.getFullYear(), d.getMonth(), d.getDate() + days, 9, 0).getTime();
 }
+const morningOn = (dayStart: number) => {
+  const d = new Date(dayStart);
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 9, 0).getTime();
+};
 const startOfDay = (t: number) => {
   const d = new Date(t);
   return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
-};
-const toDateInput = (t: number) => {
-  const d = new Date(t);
-  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
 };
 
 function followUpStatus(at: number | null, now: number): { text: string; due: boolean } {
   if (at == null) return { text: 'NOT SET', due: false };
   const days = Math.round((startOfDay(at) - startOfDay(now)) / DAY);
-  const d = new Date(at);
-  const date = `${WEEKDAYS[d.getDay()]} ${MONTHS[d.getMonth()]} ${d.getDate()}`;
+  const date = fmtDateLabel(at);
   if (at <= now) {
     if (days === 0) return { text: `DUE TODAY · ${date}`, due: true };
     return { text: `DUE · ${-days} DAY${days === -1 ? '' : 'S'} OVERDUE`, due: true };
@@ -57,6 +55,7 @@ const OPTIONS: [Owner, string, string][] = [
 export function OwnerPanel({ loop, now, onChange }: Props) {
   const out = loop.owner !== 'mine';
   const [draft, setDraft] = useState(loop.ownerWith);
+  const [calOpen, setCalOpen] = useState(false);
   const withRef = useRef<HTMLInputElement>(null);
   const focused = useRef(false);
 
@@ -82,6 +81,8 @@ export function OwnerPanel({ loop, now, onChange }: Props) {
       withRef.current?.focus();
     }
   }, [loop.owner]);
+
+  useEffect(() => setCalOpen(false), [loop.id]);
 
   const pick = (owner: Owner) => {
     if (owner === loop.owner) return;
@@ -170,27 +171,53 @@ export function OwnerPanel({ loop, now, onChange }: Props) {
                 ['NEXT WEEK', 7],
               ] as const
             ).map(([label, days]) => (
-              <button key={label} type="button" className="own__chip" onClick={() => onChange({ followUpAt: morningIn(days, now) })}>
+              <button
+                key={label}
+                type="button"
+                className="own__chip"
+                onClick={() => {
+                  setCalOpen(false);
+                  onChange({ followUpAt: morningIn(days, now) });
+                }}
+              >
                 {label}
               </button>
             ))}
-            <input
-              type="date"
-              className="own__chip own__date"
-              aria-label="Follow-up date"
-              value={loop.followUpAt != null ? toDateInput(loop.followUpAt) : ''}
-              onChange={(e) => {
-                if (!e.target.value) return;
-                const [y, m, d] = e.target.value.split('-').map(Number);
-                onChange({ followUpAt: new Date(y, m - 1, d, 9, 0).getTime() });
-              }}
-            />
+            <button
+              type="button"
+              className="own__chip own__datebtn"
+              aria-expanded={calOpen}
+              aria-label={loop.followUpAt != null ? `Follow up ${fmtDateLabel(loop.followUpAt)} — pick another date` : 'Pick a follow-up date'}
+              onClick={() => setCalOpen((v) => !v)}
+            >
+              {loop.followUpAt != null ? fmtDateLabel(loop.followUpAt) : 'PICK A DATE'}
+              <span className="own__caret" aria-hidden="true">{calOpen ? '▴' : '▾'}</span>
+            </button>
             {loop.followUpAt != null && (
-              <button type="button" className="own__chip" onClick={() => onChange({ followUpAt: null })}>
+              <button
+                type="button"
+                className="own__chip"
+                onClick={() => {
+                  setCalOpen(false);
+                  onChange({ followUpAt: null });
+                }}
+              >
                 CLEAR
               </button>
             )}
           </div>
+          {calOpen && (
+            <DatePopup
+              title="LOOP // FOLLOW UP"
+              value={loop.followUpAt}
+              now={now}
+              onPick={(day) => {
+                setCalOpen(false);
+                onChange({ followUpAt: morningOn(day) });
+              }}
+              onClose={() => setCalOpen(false)}
+            />
+          )}
         </>
       )}
     </div>
