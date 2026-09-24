@@ -1,5 +1,5 @@
 import { forwardRef, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, type RefObject } from 'react';
-import { fmtDateLabel, fmtHeaderClock, pad2 } from '../../shared/format';
+import { atMinutes, fmtDateLabel, fmtHeaderClock, fmtMinutes, minutesOfDay, pad2 } from '../../shared/format';
 import type { Scope, ScopeView } from '../../shared/types';
 import { FITS } from '../lib/greeting';
 import { useGreeting } from '../hooks/useGreeting';
@@ -267,15 +267,13 @@ interface CaptureDialogProps {
   onCreate: (title: string, note: string, start: boolean, deadlineAt: number | null, scope: Scope) => Promise<unknown>;
 }
 
-/** 17:00 local, `days` days from today — end of the working day the work is due. */
-function eveningIn(days: number, now = Date.now()) {
+/** A deadline with no hour named lands at 17:00 — end of the working day it is due. */
+const DUE_MINUTES = 17 * 60;
+/** `days` days from today, at `minutes` past midnight. */
+function dueIn(days: number, minutes: number, now = Date.now()) {
   const d = new Date(now);
-  return new Date(d.getFullYear(), d.getMonth(), d.getDate() + days, 17, 0).getTime();
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate() + days, 0, minutes).getTime();
 }
-const eveningOn = (dayStart: number) => {
-  const d = new Date(dayStart);
-  return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 17, 0).getTime();
-};
 
 /** Grow a textarea to fit its content. */
 function autosize(el: HTMLTextAreaElement | null) {
@@ -296,6 +294,8 @@ export function CaptureDialog({ onClose, scope, onCreate }: CaptureDialogProps) 
   // A deadline is opt-in: most loops age, only some are owed to someone by a date.
   const [hasDeadline, setHasDeadline] = useState(false);
   const [deadlineAt, setDeadlineAt] = useState<number | null>(null);
+  // Moving the day keeps the hour already chosen; 17:00 until one is.
+  const dueMinutes = deadlineAt != null ? minutesOfDay(deadlineAt) : DUE_MINUTES;
   const [calOpen, setCalOpen] = useState(false);
   const titleRef = useRef<HTMLTextAreaElement>(null);
   const noteRef = useRef<HTMLTextAreaElement>(null);
@@ -448,7 +448,7 @@ export function CaptureDialog({ onClose, scope, onCreate }: CaptureDialogProps) 
                     type="button"
                     className="capture__chip"
                     onClick={() => {
-                      setDeadlineAt(eveningIn(days));
+                      setDeadlineAt(dueIn(days, dueMinutes));
                       setCalOpen(false);
                     }}
                   >
@@ -459,10 +459,14 @@ export function CaptureDialog({ onClose, scope, onCreate }: CaptureDialogProps) 
                   type="button"
                   className="capture__chip capture__datebtn"
                   aria-expanded={calOpen}
-                  aria-label={deadlineAt != null ? `Deadline ${fmtDateLabel(deadlineAt)} — pick another date` : 'Pick a deadline date'}
+                  aria-label={
+                    deadlineAt != null
+                      ? `Deadline ${fmtDateLabel(deadlineAt)} ${fmtMinutes(dueMinutes)} — pick another date or time`
+                      : 'Pick a deadline date and time'
+                  }
                   onClick={() => setCalOpen((v) => !v)}
                 >
-                  {deadlineAt != null ? fmtDateLabel(deadlineAt) : 'PICK A DATE'}
+                  {deadlineAt != null ? `${fmtDateLabel(deadlineAt)} · ${fmtMinutes(dueMinutes)}` : 'PICK A DATE'}
                   <span className="capture__caret" aria-hidden="true">{calOpen ? '▴' : '▾'}</span>
                 </button>
               </div>
@@ -472,16 +476,21 @@ export function CaptureDialog({ onClose, scope, onCreate }: CaptureDialogProps) 
                 title="LOOP // DEADLINE"
                 value={deadlineAt}
                 now={Date.now()}
-                onPick={(day) => {
-                  setDeadlineAt(eveningOn(day));
+                withTime
+                defaultMinutes={DUE_MINUTES}
+                onPick={(day, minutes) => {
+                  setDeadlineAt(atMinutes(day, minutes));
                   setCalOpen(false);
                 }}
+                onTimeChange={(minutes) => setDeadlineAt((at) => (at == null ? at : atMinutes(at, minutes)))}
                 onClose={() => setCalOpen(false)}
               />
             )}
             {hasDeadline && (
               <span className={`capture__due${needsDate ? ' is-missing' : ''}`} role="status">
-                {deadlineAt != null ? `DUE ${fmtDateLabel(deadlineAt)} 17:00` : 'PICK A DATE TO COUNT DOWN TO'}
+                {deadlineAt != null
+                  ? `DUE ${fmtDateLabel(deadlineAt)} ${fmtMinutes(dueMinutes)}`
+                  : 'PICK A DATE TO COUNT DOWN TO'}
               </span>
             )}
           </div>

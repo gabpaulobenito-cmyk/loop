@@ -90,6 +90,8 @@ The **VIEW** bar filters ALL / DEADLINES / AGING alongside the ball-in-court fil
 
 Dates are picked in LOOP's own calendar (`src/components/Calendar.tsx`), never the browser's — the native picker is a light system panel that breaks the terminal look wherever it opens. Clicking a date field pops the calendar up centered, like every other LOOP pop-up; asking for a deadline opens it in the same click, since choosing the timer *is* choosing the date. The same module serves EDIT START (inline, where it has room to scroll), deadlines, follow-ups and the new-loop pop-up.
 
+A deadline is due at a time, not just on a date, so the calendar carries a **TIME** row under the grid: a typed clock (`17:00`, `1700`, `5pm`, `9:30am` all land) and presets for 09:00 / 12:00 / 17:00 / 23:59. A deadline with no hour named falls at 17:00 — the end of the working day it is owed. Moving the day afterwards keeps the hour the loop is already owed by, and moving the hour on a deadline that already has a date applies at once, with the calendar still open.
+
 ## Work and personal
 
 Every loop belongs to exactly one world — `work` (the default) or `personal` — and the workspace is always in one of them. The **scope switch** at the head of the view bar is the first control on the page:
@@ -100,7 +102,7 @@ WORK 12 | PERSONAL 03 | BOTH 15
 
 It is not a filter. It also decides what a loop captured right now is born into, which is the whole point: flip to PERSONAL and everything you catch from then on is personal, with nothing to remember and nothing to tag afterwards. The new-loop pop-up shows the choice in its own title bar, pre-set from the scope you are in, so capturing across worlds takes one click and does not change where you are.
 
-Everything downstream of the switch lives inside the current scope: the RUNNING / OPEN / CLOSED sections, the mobile tabs, the ball-in-court and timer filters, the totals in the status bar, and the docked details column — switching worlds deselects a loop belonging to the other one.
+Everything downstream of the switch lives inside the current scope: the FOCUS / RUNNING / OPEN / CLOSED sections, the mobile tabs, the ball-in-court and timer filters, the totals in the status bar, and the docked details column — switching worlds deselects a loop belonging to the other one.
 
 Two decisions worth knowing about:
 
@@ -111,9 +113,24 @@ Two decisions worth knowing about:
 
 `W` cycles WORK → PERSONAL → BOTH. A loop moves between worlds from **MOVE TO PERSONAL** / **MOVE TO WORK** in its details, which is an ordinary undoable action. Narrow layouts (rail and mobile) have no room for three segments, so the switch becomes one chip that cycles, with the full three-way choice under **SCOPE** in the ⋯ menu. The 180 px rail drops the ball-in-court counts to make room; they are still in the menu.
 
+## Focus
+
+Three sections answered *what have I started* — FOCUS answers *what am I on right now*.
+
+It sits above RUNNING, holds at most **three** loops, and is filled by hand: **FOCUS** in a loop's details, or `F`. Picking one up **starts its clock**; releasing it — **RELEASE**, `F` again, or the ■ on its row — **stops it**. A focused loop lives in FOCUS and nowhere else, so it leaves RUNNING and OPEN behind and no loop is ever listed twice. A fourth pick is refused until a slot is freed, which is the only thing that makes the section mean anything.
+
+Focus lasts **the day it was taken**. `focused_at` holds when the loop was picked up, and `isFocused` (in `shared/focus.ts`) ignores anything earlier than the caller's local midnight — so the section is empty every morning and has to be re-chosen rather than inherited. The stale rows are cleared the next time focus is taken. Because only the client knows where its day starts, taking focus sends its local midnight with the request; the server checks it is a day that began within the last 36 hours, which covers every timezone.
+
+Two rules follow from focus meaning *working on it now*, rather than being extra state to keep in sync:
+
+- **Stopping or closing a loop releases it.** They are the same gesture, so the ■ in FOCUS reads RELEASE and the server clears focus on `stop`, `close` and `delete`.
+- **The end of the day takes it off the list, not off the clock.** A loop still running at midnight keeps counting and simply reappears under RUNNING. Nothing silently stops a timer or invents a stop time.
+
+`POST /api/loops/:id/focus` (with `{ dayStart }`) and `POST /api/loops/:id/release` are ordinary undoable actions (`focus` / `release`), so `⌘Z` gives back the pick, the session it started, and the time it banked.
+
 ## Undo
 
-Reversible actions (create, start/resume, stop, close, reopen, priority, rename, note edits (the whole checklist), deadline changes, work/personal moves) go into `action_history` with a snapshot of the loop and the session they created or finished. `POST /api/undo` reverts the most recent action from the last 30 minutes, including reopening a finished session or deleting a just-started one. The undo stack is server-side, so it is consistent across devices.
+Reversible actions (create, start/resume, stop, close, reopen, priority, rename, note edits (the whole checklist), focus/release, deadline changes, work/personal moves) go into `action_history` with a snapshot of the loop and the session they created or finished. `POST /api/undo` reverts the most recent action from the last 30 minutes, including reopening a finished session or deleting a just-started one. The undo stack is server-side, so it is consistent across devices.
 
 ## Interaction model
 
@@ -127,10 +144,11 @@ One name constant at the top of that file owns who it greets.
 | Where | Action |
 | ----- | ------ |
 | Row | Opens the loop's details pop-up. Never changes its state. |
-| ▶ / ■ / ↺ button | Start, stop, or reopen. This is the only way a row changes state. |
+| ▶ / ■ / ↺ button | Start, stop, or reopen. This is the only way a row changes state. In FOCUS, ■ reads RELEASE and does both. |
+| FOCUS / `F` | Picks a loop up into FOCUS (max 3) and starts its clock; again to release it and stop the clock. |
 | Scope switch / `W` | WORK → PERSONAL → BOTH. Sets what new loops are born into, not just what is shown. |
 | + / NEW LOOP / `N` | New-loop pop-up: large title, note, and *does this have a hard external deadline?* `⏎` creates and starts, `⇧⏎` adds without starting. |
-| Details pop-up | Start/stop, **CLOSE LOOP**, PRIORITY, RENAME, **ADD NOTE** (`N`), **EDIT START**, DELETE (two clicks), the **NOTES** checklist, the **TIMER** panel, full session history |
+| Details pop-up | Start/stop, **CLOSE LOOP**, **FOCUS** / **RELEASE** (`F`), PRIORITY, RENAME, **ADD NOTE** (`N`), **EDIT START**, DELETE (two clicks), the **NOTES** checklist, the **TIMER** panel, full session history |
 | EDIT START | The same calendar, inline, plus a time field. On a running loop it moves the current session's start (the timer counts from then). On an open or closed loop it moves when the loop was opened. Moving a running start back past earlier sessions merges them into the running one, cutting any session that straddles the new start, so time is never double-counted. It can't be set in the future, and it can be undone, which restores the original sessions. |
 
 ### Ball in court: Mine · Delegated · Waiting
@@ -147,14 +165,16 @@ Set it in the details pop-up: pick the owner, type who it's with, and set a foll
 
 Closing and deleting only happen inside the details pop-up, so a stray tap on a row can't trigger them. Both can be undone.
 
-Keyboard: `N` / `⌘N` new loop · `/` or `⌘K` search · `⌘Z` undo · `↑ ↓` move between rows · `Esc` dismiss. In details: `S` start/stop, `P` priority, `E` rename, `⌫` close.
+Keyboard: `N` / `⌘N` new loop · `/` or `⌘K` search pop-up · `⌘Z` undo · `↑ ↓` move between rows · `Esc` dismiss. In details: `S` start/stop, `P` priority, `E` rename, `⌫` close.
+
+**Search** (`⌘K`, `/`, or the phone's search button) opens a centered terminal pop-up that searches titles, notes and who a loop is with, across every state in the current scope. `↑ ↓` move, `⏎` opens the loop's details, `⇧⏎` keeps the query as a filter on the list instead, `Esc` or `⌘K` closes it.
 
 ### Layout modes
 
 | Width | Mode |
 | ----- | ---- |
-| < 300 px | **Rail**: compressed header, RUNNING / OPEN sections, compact timers, notes under titles |
-| 300–599 px | **Mobile**: ALL / RUNNING / OPEN / CLOSED tabs, 30 px touch controls, safe-area insets |
+| < 300 px | **Rail**: compressed header, FOCUS / RUNNING / OPEN sections, compact timers, notes under titles |
+| 300–599 px | **Mobile**: ALL / FOCUS / RUNNING / OPEN / CLOSED tabs, 30 px touch controls, safe-area insets. Focused loops lead the ALL tab. |
 | ≥ 600 px | **Desk**: V2 half-screen rows (44 px running / 38 px open) |
 
 Overflowing notes pan slowly as in V2, pause on hover or focus, and fall back to an ellipsis under `prefers-reduced-motion` (which also stops the running-marker pulse).

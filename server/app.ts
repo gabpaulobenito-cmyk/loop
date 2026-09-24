@@ -88,6 +88,9 @@ const settingsSchema = z
   .strict();
 const idParam = z.uuid();
 const retimeSchema = z.object({ startedAt: z.number().int().positive() }).strict();
+// Focus belongs to the user's day, and only the client knows where that starts.
+// The range is checked against the server clock in focusLoop.
+const focusSchema = z.object({ dayStart: z.number().int() }).strict();
 
 function parse<T>(schema: z.ZodType<T>, value: unknown): T {
   const r = schema.safeParse(value);
@@ -193,6 +196,7 @@ export function createApp(opts: AppOptions) {
     stop: loops.stopLoop,
     close: loops.closeLoop,
     reopen: loops.reopenLoop,
+    release: loops.releaseLoop,
   } as const;
   for (const [name, fn] of Object.entries(transitions)) {
     api.post(
@@ -203,6 +207,15 @@ export function createApp(opts: AppOptions) {
       }),
     );
   }
+
+  api.post(
+    '/loops/:id/focus',
+    wrap(async (req, res) => {
+      const id = parse(idParam, req.params.id);
+      const { dayStart } = parse(focusSchema, req.body);
+      send(res, await loops.focusLoop(pool, id, dayStart, clock()));
+    }),
+  );
 
   api.post(
     '/loops/:id/retime',

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { fmtHM, fmtTimer, pad2 } from '../../shared/format';
 import { elapsedMs, hoistFireTier, isFireTier, sortClosed, sortOpen, sortRunning } from '../../shared/timer';
-import type { Loop, OpenSort, RunSort, ScopeView, ThemePref } from '../../shared/types';
+import { FOCUS_MAX, type Loop, type OpenSort, type RunSort, type ScopeView, type ThemePref } from '../../shared/types';
 import { useNow } from '../hooks/useNow';
 import { useStore } from '../hooks/useStore';
 import { useMode, type Mode } from '../hooks/useViewport';
@@ -21,10 +21,12 @@ import {
   TIMER_FILTERS,
   type ScopeCounts,
 } from './Chrome';
+import { focusFree, isFocused, sortFocus } from '../../shared/focus';
 import { Inspector, type InspectorActions } from './Inspector';
 import { LoopRow, type RowActions, type RowVariant } from './LoopRow';
+import { SearchPalette } from './SearchPalette';
 
-type Tab = 'all' | 'running' | 'open' | 'closed';
+type Tab = 'all' | 'focus' | 'running' | 'open' | 'closed';
 const TAB_KEY = 'loop.tab';
 const SCOPE_KEY = 'loop.scope';
 const WEEK = 7 * 86_400_000;
@@ -32,7 +34,7 @@ const WEEK = 7 * 86_400_000;
 function readTab(): Tab {
   try {
     const t = localStorage.getItem(TAB_KEY);
-    if (t === 'all' || t === 'running' || t === 'open' || t === 'closed') return t;
+    if (t === 'all' || t === 'focus' || t === 'running' || t === 'open' || t === 'closed') return t;
   } catch {
     // ignore
   }
@@ -67,7 +69,7 @@ export function Workspace() {
   const wide = mode === 'wide';
 
   const [query, setQuery] = useState('');
-  const [searchOpen, setSearchOpen] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
   const [tab, setTabState] = useState<Tab>(readTab);
   const [scope, setScopeState] = useState<ScopeView>(readScope);
   const [captureOpen, setCaptureOpen] = useState(false);
@@ -116,8 +118,11 @@ export function Workspace() {
   // Everything below the switch is already inside the current scope, so the
   // tabs, totals and section counts all speak about the world you are looking at.
   const inScope = useCallback((l: Loop) => scope === 'all' || l.scope === scope, [scope]);
-  const allRunning = s.loops.filter((l) => l.state === 'running' && inScope(l));
-  const allOpen = s.loops.filter((l) => l.state === 'open' && inScope(l));
+  // A focused loop lives in FOCUS and nowhere else, so it leaves RUNNING behind.
+  const allFocus = s.loops.filter((l) => isFocused(l, now) && inScope(l));
+  const allRunning = s.loops.filter((l) => l.state === 'running' && !isFocused(l, now) && inScope(l));
+  const allOpen = s.loops.filter((l) => l.state === 'open' && !isFocused(l, now) && inScope(l));
+  const focus = sortFocus(allFocus.filter(matches));
   const running = sortRunning(allRunning.filter(matches), settings.runSort, now);
   const open = sortOpen(allOpen.filter(matches), settings.openSort, now);
   const closedAll = sortClosed(s.loops.filter((l) => l.state === 'closed' && matches(l)));
@@ -133,12 +138,12 @@ export function Workspace() {
     },
   };
   const closed = q || settings.archiveRange === 'all' ? closedAll : closedAll.filter((l) => (l.closedAt ?? 0) > now - WEEK);
-  const prioCount = [...allRunning, ...allOpen].filter((l) => l.priority).length;
-  const totalActive = [...allRunning, ...allOpen].reduce((a, l) => a + elapsedMs(l, now), 0);
-  const longest = allRunning.reduce((a, l) => Math.max(a, elapsedMs(l, now)), 0);
+  const prioCount = [...allFocus, ...allRunning, ...allOpen].filter((l) => l.priority).length;
+  const totalActive = [...allFocus, ...allRunning, ...allOpen].reduce((a, l) => a + elapsedMs(l, now), 0);
+  const longest = [...allFocus, ...allRunning].reduce((a, l) => Math.max(a, elapsedMs(l, now)), 0);
 
   // Ball-in-court and timer counts across live (not closed) loops.
-  const live = [...allRunning, ...allOpen];
+  const live = [...allFocus, ...allRunning, ...allOpen];
   const timerCounts = {
     all: live.length,
     deadline: live.filter((l) => l.timerType === 'countdown').length,
@@ -162,7 +167,8 @@ export function Workspace() {
   useEffect(() => {
     if (!wide || s.load !== 'ready') return;
     if (selectedId && s.loops.some((l) => l.id === selectedId && inScope(l))) return;
-    const first = sortRunning(allRunning, settings.runSort, now)[0] ?? sortOpen(allOpen, settings.openSort, now)[0];
+    const first =
+      sortFocus(allFocus)[0] ?? sortRunning(allRunning, settings.runSort, now)[0] ?? sortOpen(allOpen, settings.openSort, now)[0];
     setSelectedId(first?.id ?? null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [wide, s.load, s.loops, selectedId, scope]);
@@ -177,6 +183,7 @@ export function Workspace() {
     () => ({
       toggle: (id) => void store.toggle(id),
       reopen: (id) => void store.reopen(id),
+      focus: (id) => void store.toggleFocus(id),
       inspect: (id) => {
         setSelectedId(id);
         if (!wide) setOverlay(true);
@@ -190,6 +197,7 @@ export function Workspace() {
     () => ({
       toggle: (id) => void store.toggle(id),
       reopen: (id) => void store.reopen(id),
+      focus: (id) => void store.toggleFocus(id),
       close: (id) => void store.close(id),
       priority: (id) => void store.togglePriority(id),
       edit: (id, patch) => store.edit(id, patch),
@@ -219,15 +227,12 @@ export function Workspace() {
     setCaptureOpen(true);
   }, []);
 
+  // ⌘K, / and the phone's search button all open the centred terminal pop-up.
   const openSearch = useCallback(() => {
     setMenuOpen(false);
-    if (compact) setSearchOpen(true);
-    // Focus after the row mounts.
-    requestAnimationFrame(() => {
-      searchRef.current?.focus();
-      searchRef.current?.select();
-    });
-  }, [compact]);
+    setCaptureOpen(false);
+    setPaletteOpen(true);
+  }, []);
 
   // ── Global keyboard shortcuts ───────────────────────────────────────────
   useEffect(() => {
@@ -238,15 +243,14 @@ export function Workspace() {
         if (menuOpen) return setMenuOpen(false);
         if (captureOpen) return setCaptureOpen(false);
         if (overlay) return setOverlay(false);
-        if (compact && searchOpen && !query) return setSearchOpen(false);
         return;
       }
       if (e.defaultPrevented || e.altKey) return;
       if (mod && k === 'k') {
         e.preventDefault();
-        return openSearch();
+        return paletteOpen ? setPaletteOpen(false) : openSearch();
       }
-      if (isTyping(e.target) || captureOpen || menuOpen) return;
+      if (isTyping(e.target) || captureOpen || menuOpen || paletteOpen) return;
       if ((mod && k === 'n') || (!mod && !e.shiftKey && k === 'n')) {
         e.preventDefault();
         return openNew();
@@ -266,7 +270,7 @@ export function Workspace() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [menuOpen, captureOpen, overlay, mode, compact, searchOpen, query, openNew, openSearch, scope, setScope]);
+  }, [menuOpen, captureOpen, overlay, paletteOpen, openNew, openSearch, scope, setScope]);
 
   // ── Rendering helpers ───────────────────────────────────────────────────
   const rows = (list: Loop[], label: string) => (
@@ -303,6 +307,38 @@ export function Workspace() {
 
   const railOrDesk = mode === 'rail' ? 'sect--rail' : '';
   const loading = (s.load === 'loading' || s.load === 'idle') && s.loops.length === 0;
+
+  // What you are on right now. Taking focus starts the clock; releasing stops it,
+  // and the list is only ever today's, so every morning starts empty.
+  const focusSection = (
+    <section aria-label="Focused loops">
+      <div className={`sect sect--focus ${railOrDesk}`}>
+        <h2 className="sect__label sect__label--focus" style={{ margin: 0 }}>FOCUS</h2>
+        <span className="sect__count sect__count--focus">
+          {pad2(focus.length)}
+          <span className="sect__of">/{pad2(FOCUS_MAX)}</span>
+        </span>
+        <span className="sect__slots" aria-hidden="true">
+          {Array.from({ length: FOCUS_MAX }, (_, i) => (
+            <span key={i} className={`slot${i < allFocus.length ? ' is-taken' : ''}`} />
+          ))}
+        </span>
+        <span className="sect__rule" />
+        {mode !== 'rail' && (
+          <span className="sect__hint">
+            {allFocus.length >= FOCUS_MAX
+              ? 'ALL SLOTS TAKEN — RELEASE ONE TO SWAP'
+              : `WHAT YOU ARE ON RIGHT NOW · ${pad2(focusFree(allFocus.length))} FREE`}
+          </span>
+        )}
+      </div>
+      {focus.length
+        ? rows(focus, 'Focused loops')
+        : emptyRow(
+            q ? 'NO FOCUS MATCHES' : mode === 'rail' ? 'NOTHING IN FOCUS' : 'NOTHING IN FOCUS — OPEN A LOOP AND PRESS F TO PICK IT UP',
+          )}
+    </section>
+  );
 
   const runningSection = (
     <section aria-label="Running loops">
@@ -410,14 +446,17 @@ export function Workspace() {
   } else if (mode === 'mobile') {
     // On the combined tab a deadline in its last day outranks everything, running or not.
     const list =
-      tab === 'running'
-        ? running
-        : tab === 'open'
-          ? open
-          : tab === 'closed'
-            ? closedAll
-            : hoistFireTier([...running, ...open], now);
-    const nothingAtAll = !q && allRunning.length + allOpen.length === 0;
+      tab === 'focus'
+        ? focus
+        : tab === 'running'
+          ? running
+          : tab === 'open'
+            ? open
+            : tab === 'closed'
+              ? closedAll
+              : // What you are on comes first, whatever else is burning.
+                [...focus, ...hoistFireTier([...running, ...open], now)];
+    const nothingAtAll = !q && allFocus.length + allRunning.length + allOpen.length === 0;
     listContent =
       list.length > 0 ? (
         rows(list, `${tab} loops`)
@@ -434,16 +473,19 @@ export function Workspace() {
         emptyRow(
           q
             ? `NO MATCHES FOR “${query.trim()}”`
-            : tab === 'running'
-              ? 'NOTHING RUNNING'
-              : tab === 'open'
-                ? 'NO OPEN LOOPS'
-                : 'NOTHING CLOSED YET',
+            : tab === 'focus'
+              ? 'NOTHING IN FOCUS — OPEN A LOOP AND PICK IT UP'
+              : tab === 'running'
+                ? 'NOTHING RUNNING'
+                : tab === 'open'
+                  ? 'NO OPEN LOOPS'
+                  : 'NOTHING CLOSED YET',
         )
       );
   } else {
     listContent = (
       <>
+        {focusSection}
         {runningSection}
         {openSection}
         {closedSection}
@@ -454,9 +496,11 @@ export function Workspace() {
   // ── Status bar ──────────────────────────────────────────────────────────
   const systemNote = !s.online
     ? 'OFFLINE — TIMERS KEEP COUNTING · CHANGES PAUSED'
-    : allRunning.length
-      ? `${allRunning.length} RUNNING · LONGEST ${fmtTimer(longest)}`
-      : 'NOTHING RUNNING';
+    : allFocus.length
+      ? `${allFocus.length} IN FOCUS${allRunning.length ? ` · ${allRunning.length} RUNNING` : ''} · LONGEST ${fmtTimer(longest)}`
+      : allRunning.length
+        ? `${allRunning.length} RUNNING · LONGEST ${fmtTimer(longest)}`
+        : 'NOTHING IN FOCUS';
   const noteNode = s.notice ? (
     <span className="status__note status__note--alert" role="alert">
       {s.notice.text}
@@ -626,9 +670,6 @@ export function Workspace() {
       ref={searchRef}
       value={query}
       onChange={setQuery}
-      onEscape={() => {
-        if (compact && !query) setSearchOpen(false);
-      }}
     />
   );
 
@@ -711,7 +752,7 @@ export function Workspace() {
       now={now}
       docked={docked}
       pending={selected ? !!s.pending[selected.id] : false}
-      keysEnabled={!captureOpen && !menuOpen}
+      keysEnabled={!captureOpen && !menuOpen && !paletteOpen}
       onDismiss={onDismiss}
       actions={inspectorActions}
     />
@@ -721,24 +762,26 @@ export function Workspace() {
     <div className="app" data-mode={mode}>
       <Header
         mode={mode}
-        anyRunning={allRunning.length > 0}
+        anyRunning={allFocus.length + allRunning.length > 0}
         search={searchField}
         onNew={openNew}
         menuOpen={menuOpen}
         onMenu={() => setMenuOpen((v) => !v)}
         menuButtonRef={menuBtnRef}
         now={now}
-        onSearch={() => (searchOpen && !query ? setSearchOpen(false) : openSearch())}
+        onSearch={openSearch}
       />
       {(mode === 'desk' || mode === 'wide' || mode === 'rail') && viewBar}
-      {compact && (searchOpen || q) && (
+      {/* A query kept from the pop-up (⇧⏎) stays visible on narrow layouts so it can be cleared. */}
+      {compact && q && (
         <div className={`searchrow${mode === 'rail' ? ' searchrow--rail' : ''}`}>{searchField}</div>
       )}
       {mode === 'mobile' && (
         <div className="tabs" role="tablist" aria-label="Filter loops">
           {(
             [
-              ['all', `ALL ${pad2(allRunning.length + allOpen.length)}`],
+              ['all', `ALL ${pad2(allFocus.length + allRunning.length + allOpen.length)}`],
+              ['focus', `FOCUS ${pad2(allFocus.length)}`],
               ['running', `RUNNING ${pad2(allRunning.length)}`],
               ['open', `OPEN ${pad2(allOpen.length)}`],
               ['closed', 'CLOSED'],
@@ -777,6 +820,23 @@ export function Workspace() {
             if (scope !== 'all' && into !== scope) setScope(into);
             const id = await store.create(title, start, note, deadlineAt, into);
             if (id && mode === 'mobile' && tab !== 'all' && tab !== (start ? 'running' : 'open')) setTab('all');
+          }}
+        />
+      )}
+      {paletteOpen && (
+        <SearchPalette
+          loops={s.loops.filter(inScope)}
+          now={now}
+          markScope={scope === 'all'}
+          initialQuery={query}
+          onClose={() => setPaletteOpen(false)}
+          onPick={(id) => {
+            setPaletteOpen(false);
+            rowActions.inspect(id);
+          }}
+          onFilter={(text) => {
+            setPaletteOpen(false);
+            setQuery(text);
           }}
         />
       )}

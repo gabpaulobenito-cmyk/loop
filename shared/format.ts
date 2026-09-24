@@ -162,3 +162,41 @@ export function fmtHeaderClock(ts: number): { weekday: string; date: string; tim
     time: `${h}:${p2(d.getMinutes())}${d.getHours() < 12 ? 'AM' : 'PM'}`,
   };
 }
+
+/** Minutes past local midnight: 17:00 → 1020. */
+export function minutesOfDay(ts: number): number {
+  const d = new Date(ts);
+  return d.getHours() * 60 + d.getMinutes();
+}
+
+/** Minutes past midnight as a clock: 1020 → "17:00". */
+export function fmtMinutes(minutes: number): string {
+  const m = ((Math.round(minutes) % 1440) + 1440) % 1440;
+  return `${p2(Math.floor(m / 60))}:${p2(m % 60)}`;
+}
+
+/** `ts`'s own local day, moved to `minutes` past midnight. */
+export function atMinutes(ts: number, minutes: number): number {
+  const d = new Date(ts);
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, minutes).getTime();
+}
+
+/**
+ * Loose time entry → minutes past midnight, or null when it isn't a time.
+ * Takes what people actually type: "17:00", "1700", "17.00", "5pm", "9",
+ * "9:30am". The field it feeds keeps the last good value, so a half-typed
+ * "17:" is simply not a time yet.
+ */
+export function parseClock(input: string): number | null {
+  const m = /^(\d{1,2})(?:[:.h]?(\d{2}))?\s*(am|pm)?$/.exec(input.trim().toLowerCase());
+  if (!m) return null;
+  let h = Number(m[1]);
+  const min = m[2] == null ? 0 : Number(m[2]);
+  if (min > 59) return null;
+  if (m[3]) {
+    if (h < 1 || h > 12) return null;
+    h = (h % 12) + (m[3] === 'pm' ? 12 : 0);
+  }
+  if (h > 23) return null;
+  return h * 60 + min;
+}

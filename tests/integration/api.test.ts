@@ -212,6 +212,101 @@ describe('priority and edits', () => {
   });
 });
 
+describe('focus', () => {
+  const startOfDay = () => {
+    const d = new Date(clock.now());
+    return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  };
+  const focus = (id: string, dayStart = startOfDay()) => post(`/api/loops/${id}/focus`, { dayStart });
+  const release = (id: string) => post(`/api/loops/${id}/release`);
+
+  it('taking focus starts the clock, releasing stops it', async () => {
+    const l = await create('Investor Update');
+    expect(l.focusedAt).toBeNull();
+
+    let r = await focus(l.id).expect(200);
+    expect(r.body.loop).toMatchObject({ state: 'running' });
+    expect(r.body.loop.focusedAt).toBe(clock.now());
+    expect(r.body.undo.label).toMatch(/^Focused/);
+    expect(await sessions(l.id)).toHaveLength(1);
+
+    clock.advance(30 * M);
+    r = await release(l.id).expect(200);
+    expect(r.body.loop).toMatchObject({ state: 'open', focusedAt: null, runningSince: null, accumulatedMs: 30 * M });
+    expect(r.body.undo.label).toMatch(/^Released/);
+  });
+
+  it('focusing a loop that is already running keeps its session', async () => {
+    const l = await create('Investor Update', { start: true });
+    clock.advance(10 * M);
+    const r = await focus(l.id).expect(200);
+    expect(r.body.loop).toMatchObject({ state: 'running', runningSince: l.runningSince });
+    expect(await sessions(l.id)).toHaveLength(1);
+    // Focusing twice changes nothing.
+    const again = await focus(l.id).expect(200);
+    expect(again.body.loop.focusedAt).toBe(r.body.loop.focusedAt);
+  });
+
+  it('holds three loops and refuses a fourth until one is released', async () => {
+    const ids: string[] = [];
+    for (let i = 0; i < 4; i++) ids.push((await create(`Focus ${i}`)).id);
+    for (const id of ids.slice(0, 3)) await focus(id).expect(200);
+    const refused = await focus(ids[3]).expect(409);
+    expect(refused.body.error.code).toBe('focus_full');
+    expect(refused.body.error.message).toMatch(/release one first/);
+    await release(ids[0]).expect(200);
+    await focus(ids[3]).expect(200);
+  });
+
+  it('a pick from an earlier day does not count, and is cleared', async () => {
+    const yesterday = await create('Yesterday');
+    await focus(yesterday.id).expect(200);
+    // Next day: the old pick is stale, so the slot is free again.
+    clock.advance(26 * H);
+    const today = await create('Today');
+    const r = await focus(today.id).expect(200);
+    expect(r.body.loop.focusedAt).toBe(clock.now());
+    const state = await agent.get('/api/state').expect(200);
+    expect(state.body.loops.find((l: Loop) => l.id === yesterday.id).focusedAt).toBeNull();
+  });
+
+  it('stopping or closing a focused loop lets it go', async () => {
+    const a = await create('Stopped');
+    await focus(a.id).expect(200);
+    clock.advance(M);
+    const stopped = await post(`/api/loops/${a.id}/stop`).expect(200);
+    expect(stopped.body.loop.focusedAt).toBeNull();
+    expect(stopped.body.undo.label).toMatch(/^Released/);
+
+    const b = await create('Closed');
+    await focus(b.id).expect(200);
+    const closed = await post(`/api/loops/${b.id}/close`).expect(200);
+    expect(closed.body.loop).toMatchObject({ state: 'closed', focusedAt: null });
+    await focus(b.id).expect(409);
+  });
+
+  it('undo takes back a focus and a release', async () => {
+    const l = await create('Investor Update');
+    await focus(l.id).expect(200);
+    let r = await post('/api/undo').expect(200);
+    expect(r.body.loop).toMatchObject({ state: 'open', focusedAt: null });
+    expect(await sessions(l.id)).toHaveLength(0);
+
+    await focus(l.id).expect(200);
+    clock.advance(5 * M);
+    await release(l.id).expect(200);
+    r = await post('/api/undo').expect(200);
+    expect(r.body.loop).toMatchObject({ state: 'running' });
+    expect(r.body.loop.focusedAt).not.toBeNull();
+  });
+
+  it('refuses a day start that is not a plausible today', async () => {
+    const l = await create('Investor Update');
+    await post(`/api/loops/${l.id}/focus`, { dayStart: Date.now() + 2 * 86_400_000 }).expect(400);
+    await post(`/api/loops/${l.id}/focus`, { dayStart: Date.now() - 5 * 86_400_000 }).expect(400);
+  });
+});
+
 describe('notes checklist', () => {
   const note = (text: string, done = false) => ({ id: randomUUID(), text, done });
   const texts = (l: Loop) => l.notes.map((n) => n.text);

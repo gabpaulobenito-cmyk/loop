@@ -1260,6 +1260,137 @@ ul {
   .capture__title { font-size: 18px !important; }
 }
 
+
+/* ── Search pop-up (⌘K) ───────────────────────────────────────────────── */
+
+.palette {
+  width: min(720px, calc(100vw - 24px));
+  height: min(560px, calc(100dvh - 96px));
+  overflow: hidden;
+}
+.palette__count {
+  font: 500 10px/1 var(--f-mono);
+  letter-spacing: 0.1em;
+  color: var(--lime-ink);
+  white-space: nowrap;
+}
+.palette__field {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 18px 16px 18px 20px;
+  border-bottom: 1px solid var(--line);
+}
+.palette__field .capture__prompt { line-height: 1; }
+.palette__input {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  outline: none;
+  font: 500 22px/1.2 var(--f-mono);
+  letter-spacing: -0.01em;
+  color: var(--text-hi);
+  caret-color: var(--lime);
+}
+.palette__input::placeholder { color: var(--muted-3); opacity: 0.5; }
+.palette__clear {
+  flex: none;
+  font: 500 12px/1 var(--f-mono);
+  color: var(--muted-2);
+  padding: 4px 6px;
+}
+.palette__clear:hover { color: var(--text-hi); }
+.palette__list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  margin: 0;
+  padding: 6px 0;
+  list-style: none;
+}
+.palette__item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 40px;
+  padding: 6px 16px 6px 8px;
+  cursor: pointer;
+  font: 400 13.5px/1.35 var(--f-mono);
+  color: var(--text);
+}
+.palette__item[aria-selected='true'] {
+  background: var(--lime-bg);
+  box-shadow: inset 2px 0 0 var(--lime-ink);
+  color: var(--text-hi);
+}
+.palette__caret { flex: none; width: 12px; color: var(--lime-ink); font-size: 11px; text-align: center; }
+.palette__item .marker { flex: none; }
+.palette__main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.palette__title,
+.palette__via { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.palette__via { font-size: 11.5px; color: var(--muted-3); }
+.palette__item[data-kind='closed'] .palette__title { color: var(--muted-3); text-decoration: line-through; text-decoration-color: var(--line-ctl); }
+.palette__item mark { background: none; color: var(--lime-ink); text-decoration: underline; text-underline-offset: 3px; }
+.palette__scope,
+.palette__kind,
+.palette__time {
+  flex: none;
+  font: 500 9.5px/1 var(--f-mono);
+  letter-spacing: 0.1em;
+  color: var(--muted-3);
+  white-space: nowrap;
+}
+.palette__kind { width: 58px; text-align: right; }
+.palette__item[data-kind='running'] .palette__kind,
+.palette__item[data-kind='focus'] .palette__kind { color: var(--lime-ink); }
+.palette__time { width: 58px; text-align: right; font-size: 11px; letter-spacing: 0; color: var(--muted); font-variant-numeric: tabular-nums; }
+.palette__empty,
+.palette__more {
+  padding: 28px 20px;
+  font: 500 10.5px/1.4 var(--f-mono);
+  letter-spacing: 0.1em;
+  color: var(--muted-3);
+  text-align: center;
+}
+.palette__more { padding: 12px 20px; }
+.palette__foot {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  height: 32px;
+  padding: 0 16px;
+  background: var(--bar);
+  border-top: 1px solid var(--line);
+  font: 500 9.5px/1 var(--f-mono);
+  letter-spacing: 0.1em;
+  color: var(--muted-3);
+  white-space: nowrap;
+  overflow: hidden;
+}
+.palette__foot kbd { font: inherit; color: var(--text); margin-right: 4px; }
+
+@media (max-width: 599px) {
+  .palette { width: calc(100vw - 24px); height: min(520px, calc(100dvh - 48px)); }
+  .palette__field { padding: 14px 12px 14px 14px; gap: 10px; }
+  .palette__input { font-size: 18px; }
+  .palette__item { padding-right: 12px; gap: 8px; }
+  .palette__kind { display: none; }
+  .palette__foot span:nth-child(n + 3) { display: none; }
+}
+@media (pointer: coarse) {
+  /* 16px+ keeps iOS from zooming in on focus. */
+  .palette__input { font-size: 18px; }
+  .palette__foot { display: none; }
+}
+@media (max-width: 599px) and (pointer: coarse) {
+  .palette { top: calc(env(safe-area-inset-top, 0px) + 16px); transform: translateX(-50%); animation: none; height: min(440px, calc(100dvh - 32px)); }
+}
+
 .menu {
   position: fixed;
   z-index: 60;
@@ -1620,6 +1751,39 @@ ul {
 .term-bar__dl[data-tier='urgent'],
 .term-bar__dl[data-tier='overdue'] { color: var(--dl-urgent); }
 
+/* ── FOCUS section ──────────────────────────────────────────────────────── */
+/* The loudest thing on the page: inverse-video label, filled slots, a lime bar
+   down the rows. Three slots, today only — see shared/focus.ts. */
+
+.sect--focus { height: 28px; }
+.sect__label--focus {
+  background: var(--lime);
+  color: #0f0f0f;
+  padding: 4px 6px 3px;
+  font: 700 11px/1 var(--f-cond);
+  letter-spacing: 0.22em;
+}
+.sect__count--focus { color: var(--lime-ink); font-weight: 600; }
+.sect__of { color: var(--muted-3); font-weight: 400; }
+.sect__slots { display: flex; gap: 3px; align-items: center; }
+.slot { width: 7px; height: 7px; border: 1px solid var(--line-ctl); }
+.slot.is-taken { background: var(--lime); border-color: var(--lime); }
+.sect__hint {
+  font: 500 9px/1 var(--f-mono);
+  letter-spacing: 0.08em;
+  color: var(--muted-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.row.is-focus { background: var(--lime-bg); }
+.row.is-focus:not([data-tier='overdue']) { box-shadow: inset 2px 0 0 var(--lime); }
+.row.is-focus:hover { background: var(--lime-bg-strong); }
+.row.is-focus .row__title { color: var(--text-hi); font-weight: 500; }
+.term-bar__focus { color: var(--lime-ink); font-weight: 700; }
+.tab[aria-selected='true'][data-tab='focus'] { color: var(--lime-ink); }
+
 /* ── Notes checklist (inspector) ────────────────────────────────────────── */
 /* The order is the user's. The first unchecked line is what the row marquees,
    so it is tagged ON ROW; checked lines stay exactly where they were put. */
@@ -1793,7 +1957,7 @@ ul {
 .dlp__chip:hover { background: var(--hover); color: var(--text-hi); }
 .dlp__chip--danger { color: var(--dl-urgent); font-weight: 700; }
 .dlp__confirm .dlp__chip { flex: 0 0 auto; border: 1px solid var(--line-ctl); }
-.dlp__datebtn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-width: 118px; color: var(--text-2); }
+.dlp__datebtn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-width: 164px; color: var(--text-2); }
 .dlp__datebtn[aria-expanded='true'] { background: var(--hover); color: var(--text-hi); box-shadow: inset 0 -2px 0 var(--dlp, var(--line-ctl-hover)); }
 .dlp__caret { font-size: 8px; opacity: 0.7; }
 @container inspector (max-width: 420px) {
@@ -1837,7 +2001,7 @@ ul {
   border-radius: 0;
 }
 .capture__chip:hover { background: var(--hover); color: var(--text-hi); }
-.capture__datebtn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-width: 122px; color: var(--text-2); }
+.capture__datebtn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-width: 168px; color: var(--text-2); }
 .capture__datebtn[aria-expanded='true'] { background: var(--hover); color: var(--text-hi); box-shadow: inset 0 -2px 0 var(--dl-near); }
 .capture__caret { font-size: 8px; opacity: 0.7; }
 .capture__due { font: 500 10px/1 var(--f-mono); letter-spacing: 0.06em; color: var(--muted-2); }
@@ -1870,6 +2034,54 @@ ul {
 .datepop .term-bar { flex: none; }
 .datepop__value { font: 500 10px/1 var(--f-mono); letter-spacing: 0.08em; color: var(--lime-ink); white-space: nowrap; }
 .datepop .cal { flex: 1 1 auto; min-height: 0; overflow-y: auto; border: 0; }
+
+/* The hour the day carries — a deadline is due at a time, not just on a date. */
+.datepop__time {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  border-top: 1px solid var(--line);
+  background: var(--bar);
+}
+.datepop__timelabel { font: 500 9px/1 var(--f-mono); letter-spacing: 0.12em; color: var(--muted-3); }
+.datepop__timein {
+  width: 66px;
+  height: 26px;
+  padding: 0 8px;
+  font: 500 12px/1 var(--f-mono);
+  letter-spacing: 0.06em;
+  color: var(--text-hi);
+  background: var(--bg);
+  border: 1px solid var(--line-ctl);
+  border-radius: 0;
+  text-align: center;
+}
+.datepop__timein:focus-visible { outline: none; border-color: var(--lime); }
+.datepop__timein.is-bad { border-color: var(--dl-urgent); color: var(--dl-urgent); }
+.datepop__presets { display: flex; flex: 1 1 auto; justify-content: flex-end; gap: 1px; background: var(--line); border: 1px solid var(--line); }
+.datepop__preset {
+  height: 24px;
+  padding: 0 7px;
+  font: 500 10px/1 var(--f-mono);
+  letter-spacing: 0.06em;
+  color: var(--muted-2);
+  background: var(--bg);
+  white-space: nowrap;
+}
+.datepop__preset:hover { background: var(--hover); color: var(--text-hi); }
+.datepop__preset[aria-pressed='true'] { color: var(--lime-ink); box-shadow: inset 0 -2px 0 var(--lime); }
+/* Touch fields are forced to 16px so tapping never zooms — the clock needs the room. */
+@media (pointer: coarse) {
+  .datepop__timein { width: 84px; height: 30px; }
+  .datepop__preset { height: 28px; padding: 0 6px; }
+}
+@media (max-width: 359px) {
+  .datepop__time { flex-wrap: wrap; }
+  .datepop__presets { flex-basis: 100%; justify-content: stretch; }
+  .datepop__preset { flex: 1 1 0; }
+}
 
 /* ── Motion preferences ─────────────────────────────────────────────────── */
 

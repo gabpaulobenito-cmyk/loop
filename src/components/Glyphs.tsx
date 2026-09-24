@@ -8,10 +8,12 @@ interface Props {
   disabled?: boolean;
   onToggle: () => void;
   onReopen: () => void;
+  /** What stopping means here — in FOCUS it is 'Release'. */
+  stopLabel?: string;
 }
 
 /** Start / stop / reopen control. Stops click propagation so the parent row does not also fire. */
-export function ToggleButton({ loop, size = 'md', disabled, onToggle, onReopen }: Props) {
+export function ToggleButton({ loop, size = 'md', disabled, onToggle, onReopen, stopLabel }: Props) {
   const cls = `tbtn${size === 'md' ? '' : ` tbtn--${size}`}`;
   if (loop.state === 'closed') {
     return (
@@ -37,8 +39,8 @@ export function ToggleButton({ loop, size = 'md', disabled, onToggle, onReopen }
       type="button"
       className={cls}
       data-ctl="toggle"
-      title={running ? 'STOP' : 'START'}
-      aria-label={`${running ? 'Stop' : loop.accumulatedMs > 0 ? 'Resume' : 'Start'} ${loop.title}`}
+      title={running ? (stopLabel ?? 'STOP').toUpperCase() : 'START'}
+      aria-label={`${running ? (stopLabel ?? 'Stop') : loop.accumulatedMs > 0 ? 'Resume' : 'Start'} ${loop.title}`}
       disabled={disabled}
       onClick={(e) => {
         e.stopPropagation();

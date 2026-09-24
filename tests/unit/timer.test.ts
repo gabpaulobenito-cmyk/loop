@@ -21,6 +21,7 @@ function loop(p: Partial<Loop> & { id: string }): Loop {
     title: p.id,
     note: '',
     notes: [],
+    focusedAt: null,
     priority: false,
     state: 'open',
     createdAt: 0,

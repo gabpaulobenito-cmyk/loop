@@ -60,6 +60,11 @@ export interface Loop {
   deadlineAt: number | null;
   /** Work or personal. Every loop has exactly one. */
   scope: Scope;
+  /**
+   * When this loop was put in focus, or null. Focus is for today only: a pick
+   * from an earlier day no longer counts (see `shared/focus.ts`).
+   */
+  focusedAt: number | null;
 }
 
 export interface Session {
@@ -125,6 +130,8 @@ export const TITLE_MAX = 140;
 export const NOTE_MAX = 280;
 /** Items one loop's checklist may hold. Longer than this is a project, not a note. */
 export const NOTES_MAX = 20;
+/** Loops that may be in focus at once. The limit is what makes focus mean anything. */
+export const FOCUS_MAX = 3;
 export const WITH_MAX = 60;
 /** How far ahead or behind a deadline or follow-up date may be set. */
 export const DATE_RANGE_MS = 10 * 365 * 86_400_000;

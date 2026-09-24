@@ -6,6 +6,7 @@ import { finalizeSession } from '../shared/timer';
 import { activeNote, normalizeNotes, notesFromNote } from '../shared/notes';
 import {
   DEFAULT_SETTINGS,
+  FOCUS_MAX,
   UNDO_WINDOW_MS,
   type Loop,
   type LoopState,
@@ -19,7 +20,8 @@ import {
 } from '../shared/types';
 
 type ActionKind =
-  | 'create' | 'start' | 'stop' | 'close' | 'reopen' | 'priority' | 'edit' | 'delete' | 'retime' | 'handoff' | 'deadline' | 'scope';
+  | 'create' | 'start' | 'stop' | 'close' | 'reopen' | 'priority' | 'edit' | 'delete' | 'retime' | 'handoff' | 'deadline'
+  | 'scope' | 'focus' | 'release';
 
 interface LoopRow {
   id: string;
@@ -43,6 +45,7 @@ interface LoopRow {
   timer_type: TimerType;
   deadline_at: Date | null;
   scope: Scope;
+  focused_at: Date | null;
   session_count?: number;
 }
 
@@ -70,6 +73,8 @@ interface Snapshot {
   deadlineAt?: number | null;
   /** Present on snapshots taken after work/personal scope was added. */
   scope?: Scope;
+  /** Present on snapshots taken after focus was added. */
+  focusedAt?: number | null;
   /** Original start of a session moved by a retime action. */
   sessionStart?: { id: string; startedAt: number };
   /** Earlier sessions a backdated running session absorbed (restored on undo). */
@@ -105,6 +110,7 @@ function toLoop(r: LoopRow): Loop {
     timerType: r.timer_type,
     deadlineAt: ms(r.deadline_at),
     scope: r.scope,
+    focusedAt: ms(r.focused_at),
   };
 }
 
@@ -127,6 +133,7 @@ function snapshot(r: LoopRow): Snapshot {
     timerType: r.timer_type,
     deadlineAt: ms(r.deadline_at),
     scope: r.scope,
+    focusedAt: ms(r.focused_at),
   };
 }
 
@@ -318,11 +325,74 @@ export function stopLoop(pool: Pool, id: string, now: number) {
   return mutate(pool, id, now, async (c, row) => {
     if (row.state !== 'running') return null;
     const { sessionId, accumulatedMs } = await finishSession(c, row, now);
+    // A focused loop is one you are working on, so stopping it lets it go.
+    const wasFocused = row.focused_at != null;
     await c.query(
-      `UPDATE loops SET state = 'open', running_since = NULL, accumulated_ms = $2, version = version + 1, updated_at = $3 WHERE id = $1`,
+      `UPDATE loops SET state = 'open', running_since = NULL, accumulated_ms = $2, focused_at = NULL,
+         version = version + 1, updated_at = $3 WHERE id = $1`,
       [id, accumulatedMs, new Date(now)],
     );
-    return { kind: 'stop', label: `Stopped ${quote(row.title)}`, sessionEndedId: sessionId };
+    return {
+      kind: wasFocused ? 'release' : 'stop',
+      label: `${wasFocused ? 'Released' : 'Stopped'} ${quote(row.title)}`,
+      sessionEndedId: sessionId,
+    };
+  });
+}
+
+/**
+ * Take focus: put this loop among the few being worked on right now, and start
+ * its timer. `dayStart` is the caller's local midnight — focus belongs to a day,
+ * so picks from earlier days are cleared here rather than counted against the
+ * limit, and the section is empty again every morning.
+ */
+export function focusLoop(pool: Pool, id: string, dayStart: number, now: number) {
+  return mutate(pool, id, now, async (c, row) => {
+    // A day that began within the last 36 hours covers every timezone on earth.
+    if (dayStart > now + 60_000 || dayStart <= now - 36 * 3_600_000) {
+      throw new HttpError(400, 'invalid_request', 'Day start is out of range');
+    }
+    if (row.state === 'closed') throw new HttpError(409, 'loop_closed', 'Reopen this loop before focusing it');
+    // Yesterday's picks are not focus today; drop them before counting.
+    await c.query('UPDATE loops SET focused_at = NULL WHERE focused_at IS NOT NULL AND focused_at < $1', [at(dayStart)]);
+    if (row.focused_at != null && row.focused_at.getTime() >= dayStart) return null;
+
+    const { rows } = await c.query<{ n: number }>(
+      `SELECT count(*)::int AS n FROM loops WHERE focused_at IS NOT NULL AND deleted_at IS NULL AND id <> $1`,
+      [id],
+    );
+    if (rows[0].n >= FOCUS_MAX) {
+      throw new HttpError(409, 'focus_full', `Focus holds ${FOCUS_MAX} loops — release one first`);
+    }
+
+    // Focus is working on something, so it starts the clock if it isn't already.
+    const sessionStartedId = row.state === 'running' ? undefined : await openSession(c, id, now);
+    await c.query(
+      `UPDATE loops SET focused_at = $2, state = 'running', running_since = COALESCE(running_since, $2),
+         version = version + 1, updated_at = $2 WHERE id = $1`,
+      [id, new Date(now)],
+    );
+    return { kind: 'focus', label: `Focused ${quote(row.title)}`, sessionStartedId };
+  });
+}
+
+/** Let a loop go: out of focus, and off the clock. */
+export function releaseLoop(pool: Pool, id: string, now: number) {
+  return mutate(pool, id, now, async (c, row) => {
+    if (row.focused_at == null) return null;
+    let accumulatedMs = Number(row.accumulated_ms);
+    let sessionEndedId: string | undefined;
+    if (row.state === 'running') {
+      const done = await finishSession(c, row, now);
+      accumulatedMs = done.accumulatedMs;
+      sessionEndedId = done.sessionId;
+    }
+    await c.query(
+      `UPDATE loops SET focused_at = NULL, state = 'open', running_since = NULL, accumulated_ms = $2,
+         version = version + 1, updated_at = $3 WHERE id = $1`,
+      [id, accumulatedMs, new Date(now)],
+    );
+    return { kind: 'release', label: `Released ${quote(row.title)}`, sessionEndedId };
   });
 }
 
@@ -337,9 +407,10 @@ export function closeLoop(pool: Pool, id: string, now: number) {
       accumulatedMs = done.accumulatedMs;
       sessionEndedId = done.sessionId;
     }
+    // A closed loop is finished, so it can never still be in focus.
     await c.query(
       `UPDATE loops SET state = 'closed', closed_at = $2, running_since = NULL, accumulated_ms = $3,
-         version = version + 1, updated_at = $2 WHERE id = $1`,
+         focused_at = NULL, version = version + 1, updated_at = $2 WHERE id = $1`,
       [id, new Date(now), accumulatedMs],
     );
     return { kind: 'close', label: `Closed ${quote(row.title)}`, sessionEndedId };
@@ -615,7 +686,7 @@ export async function deleteLoop(pool: Pool, id: string, now: number): Promise<M
     }
     await c.query(
       `UPDATE loops SET deleted_at = $2, state = $3, running_since = NULL, accumulated_ms = $4,
-         version = version + 1, updated_at = $2 WHERE id = $1`,
+         focused_at = NULL, version = version + 1, updated_at = $2 WHERE id = $1`,
       [id, new Date(now), state, accumulatedMs],
     );
     await recordAction(c, id, snapshot(row), { kind: 'delete', label: `Deleted ${quote(row.title)}`, sessionEndedId }, now);
@@ -680,6 +751,9 @@ export async function undoLast(pool: Pool, now: number): Promise<MutationResult>
     }
     if (b.scope !== undefined) {
       await c.query('UPDATE loops SET scope = $2 WHERE id = $1', [h.loop_id, b.scope]);
+    }
+    if (b.focusedAt !== undefined) {
+      await c.query('UPDATE loops SET focused_at = $2 WHERE id = $1', [h.loop_id, at(b.focusedAt)]);
     }
     if (b.timerType !== undefined) {
       await c.query('UPDATE loops SET timer_type = $2, deadline_at = $3 WHERE id = $1', [

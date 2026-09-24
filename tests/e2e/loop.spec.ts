@@ -272,6 +272,105 @@ test.describe('row opens the details pop-up', () => {
   }
 });
 
+test.describe('focus', () => {
+  const make = async (page: import('@playwright/test').Page, title: string) => {
+    await page.request.post('/api/loops', { headers: H, data: { id: crypto.randomUUID(), title } });
+  };
+
+  test.describe('on a wide window', () => {
+    test.use({ viewport: { width: 1440, height: 900 } });
+
+    test('holds three loops, takes them out of the other sections, and lets them go', async ({ page }) => {
+      await login(page);
+      await resetData(page.request);
+      const stamp = Date.now();
+      const titles = [0, 1, 2, 3].map((i) => `Focus ${i} ${stamp}`);
+      for (const t of titles) await make(page, t);
+      await page.reload();
+
+      const focusSection = page.getByRole('region', { name: 'Focused loops' });
+      const openSection = page.getByRole('region', { name: 'Open loops' });
+      const pane = page.locator('.insp-pane');
+      await expect(focusSection).toContainText('NOTHING IN FOCUS');
+      await expect(focusSection.locator('.sect__count')).toHaveText('00/03');
+
+      const pick = async (title: string) => {
+        await page.locator('[data-row]', { hasText: title }).click({ position: { x: 4, y: 4 } });
+        await pane.getByRole('group', { name: 'Loop actions' }).getByRole('button', { name: 'FOCUS', exact: true }).click();
+      };
+
+      // Picking one starts its clock and moves it out of OPEN.
+      await pick(titles[0]);
+      const first = focusSection.locator('[data-row]', { hasText: titles[0] });
+      await expect(first).toHaveAttribute('data-state', 'running');
+      await expect(first).toHaveAttribute('data-focus', 'true');
+      await expect(openSection.locator('[data-row]', { hasText: titles[0] })).toHaveCount(0);
+      await expect(focusSection.locator('.sect__count')).toHaveText('01/03');
+      await expect(pane.locator('.term-bar__focus')).toHaveText(/FOCUS/);
+
+      // Three is the limit; the fourth is refused and stays where it was.
+      await pick(titles[1]);
+      await pick(titles[2]);
+      await expect(focusSection.locator('.sect__count')).toHaveText('03/03');
+      await expect(focusSection).toContainText('ALL SLOTS TAKEN');
+      await pick(titles[3]);
+      await expect(page.locator('.status__note')).toContainText('Focus holds 3 loops');
+      await expect(openSection.locator('[data-row]', { hasText: titles[3] })).toBeVisible();
+      await expect(focusSection.locator('[data-row]')).toHaveCount(3);
+
+      // The stop button in FOCUS says RELEASE, and hands the loop back to OPEN.
+      await first.getByRole('button', { name: `Release ${titles[0]}` }).click();
+      await expect(focusSection.locator('[data-row]', { hasText: titles[0] })).toHaveCount(0);
+      await expect(openSection.locator('[data-row]', { hasText: titles[0] })).toHaveAttribute('data-state', 'open');
+      await expect(focusSection.locator('.sect__count')).toHaveText('02/03');
+
+      // It survives a reload, and closing a focused loop lets it go too.
+      await page.reload();
+      await expect(focusSection.locator('[data-row]')).toHaveCount(2);
+      await focusSection.locator('[data-row]', { hasText: titles[1] }).click({ position: { x: 4, y: 4 } });
+      await pane.getByRole('group', { name: 'Loop actions' }).getByRole('button', { name: 'CLOSE LOOP' }).click();
+      await expect(focusSection.locator('[data-row]', { hasText: titles[1] })).toHaveCount(0);
+      await expect(focusSection.locator('.sect__count')).toHaveText('01/03');
+
+      // Undo puts it back in focus, still on the clock.
+      await page.getByRole('button', { name: /^Undo: Closed/ }).click();
+      const back = focusSection.locator('[data-row]', { hasText: titles[1] });
+      await expect(back).toBeVisible();
+      await expect(back).toHaveAttribute('data-state', 'running');
+    });
+  });
+
+  test.describe('on a phone', () => {
+    test.use({ viewport: { width: 393, height: 800 } });
+
+    test('has its own tab, and F picks a loop up from the pop-up', async ({ page }) => {
+      await login(page);
+      await resetData(page.request);
+      const title = `Phone focus ${Date.now()}`;
+      await make(page, title);
+      await page.reload();
+
+      const tabs = page.getByRole('tablist', { name: 'Filter loops' });
+      await expect(tabs.getByRole('tab', { name: /^FOCUS/ })).toHaveText('FOCUS 00');
+
+      await page.locator('[data-row]', { hasText: title }).click({ position: { x: 4, y: 4 } });
+      const dialog = page.getByRole('dialog', { name: 'Loop details' });
+      await expect(dialog).toBeVisible();
+      await page.keyboard.press('f');
+      await expect(dialog.getByRole('button', { name: 'RELEASE', exact: true })).toBeVisible();
+      await page.keyboard.press('Escape');
+
+      await expect(tabs.getByRole('tab', { name: /^FOCUS/ })).toHaveText('FOCUS 01');
+      await tabs.getByRole('tab', { name: /^FOCUS/ }).click();
+      const row = page.locator('[data-row]', { hasText: title });
+      await expect(row).toHaveAttribute('data-focus', 'true');
+      await expect(row).toHaveAttribute('data-state', 'running');
+      // The phone list never scrolls sideways, focus rows included.
+      expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(393);
+    });
+  });
+});
+
 test.describe('the notes checklist', () => {
   test.use({ viewport: { width: 1440, height: 900 } });
 
@@ -636,7 +735,7 @@ test.describe('header', () => {
     expect(await greet.evaluate((el) => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
   });
 
-  test('mobile search icon opens search', async ({ page }) => {
+  test('mobile search icon opens the search pop-up', async ({ page }) => {
     await page.setViewportSize({ width: 375, height: 800 });
     await login(page);
     await resetData(page.request);
@@ -645,12 +744,37 @@ test.describe('header', () => {
     await page.reload();
 
     await page.getByRole('button', { name: 'Search loops' }).click();
-    const box = page.getByRole('searchbox', { name: 'Search loops' });
+    const dialog = page.getByRole('dialog', { name: 'Search loops' });
+    const box = dialog.getByRole('combobox', { name: 'Search loops' });
     await expect(box).toBeFocused();
     await box.fill('hikari');
+    await expect(dialog.getByRole('option')).toHaveCount(1);
+    await expect(dialog.getByRole('option')).toContainText('Findable Hikari task');
+    // ⇧⏎ keeps the query on the list itself.
+    await box.press('Shift+Enter');
+    await expect(dialog).toHaveCount(0);
     await expect(page.locator('[data-row]', { hasText: 'Findable Hikari task' })).toBeVisible();
     await expect(page.locator('[data-row]', { hasText: 'Something else' })).toHaveCount(0);
     expect(await page.evaluate(() => document.documentElement.scrollWidth - innerWidth)).toBeLessThanOrEqual(0);
+  });
+
+  test('⌘K opens a centred search pop-up; Enter opens the loop', async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await login(page);
+    await resetData(page.request);
+    await page.request.post('/api/loops', { headers: H, data: { id: crypto.randomUUID(), title: 'Findable Hikari task' } });
+    await page.request.post('/api/loops', { headers: H, data: { id: crypto.randomUUID(), title: 'Something else' } });
+    await page.reload();
+
+    await page.keyboard.press('ControlOrMeta+k');
+    const dialog = page.getByRole('dialog', { name: 'Search loops' });
+    await expect(dialog).toBeVisible();
+    await page.keyboard.type('hikari');
+    await page.keyboard.press('Enter');
+    await expect(dialog).toHaveCount(0);
+    await expect(page.locator('.inspector').first()).toContainText('Findable Hikari task');
+    // The list itself is left unfiltered.
+    await expect(page.locator('[data-row]', { hasText: 'Something else' })).toBeVisible();
   });
 });
 
@@ -876,6 +1000,30 @@ test.describe('dual timers', () => {
     await expect(timer.getByRole('radio', { name: 'DEADLINE' })).toHaveAttribute('aria-checked', 'true');
     await expect(timer).toContainText('IN 10 DAYS');
 
+    // A deadline lands at 17:00 unless it is told otherwise, and the hour is
+    // editable next to the day — by hand or from a preset.
+    await expect(timer).toContainText('17:00');
+    await timer.getByRole('button', { name: /pick another date/i }).click();
+    await expect(calendar).toBeVisible();
+    const time = calendar.getByRole('textbox', { name: 'Time of day' });
+    await time.fill('930');
+    await time.press('Enter');
+    await expect(timer).toContainText('09:30');
+    await calendar.getByRole('button', { name: '12:00' }).click();
+    await expect(time).toHaveValue('12:00');
+    await expect(timer).toContainText('12:00');
+    // The day it lands on is untouched by the hour.
+    await expect(timer).toContainText('IN 10 DAYS');
+    await page.keyboard.press('Escape');
+    await expect(calendar).toHaveCount(0);
+    await expect
+      .poll(async () => {
+        const st = await (await page.request.get('/api/state', { headers: H })).json();
+        const at = new Date(st.loops.find((x: { title: string }) => x.title === title).deadlineAt);
+        return [at.getHours(), at.getMinutes()];
+      })
+      .toEqual([12, 0]);
+
     // The field reopens it, and Escape leaves the deadline alone.
     await timer.getByRole('button', { name: /pick another date/i }).click();
     await expect(calendar).toBeVisible();
@@ -886,6 +1034,8 @@ test.describe('dual timers', () => {
 
     await timer.getByRole('button', { name: 'NEXT WEEK' }).click();
     await expect(timer).toContainText('IN 7 DAYS');
+    // Moving the day keeps the hour the loop is owed by.
+    await expect(timer).toContainText('12:00');
 
     // Asking for the ageing timer only raises the question; the deadline survives it.
     await timer.getByRole('radio', { name: 'AGING' }).click();

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { dayGap, fmtDateLabel } from '../../shared/format';
+import { atMinutes, dayGap, fmtDateLabel, fmtMinutes, minutesOfDay } from '../../shared/format';
 import { deadlineTier, remainingMs } from '../../shared/timer';
 import type { Loop } from '../../shared/types';
 import { Countdown } from './Countdown';
@@ -12,28 +12,24 @@ interface Props {
   onDrop: () => void;
 }
 
-/** Deadlines land at 17:00 local — the end of the working day the work is owed. */
-const DUE_HOUR = 17;
-/** 17:00 local, `days` days from today. */
-function eveningIn(days: number, now: number) {
+/** A deadline with no hour named lands at 17:00 local — the end of the working day. */
+const DUE_MINUTES = 17 * 60;
+/** `days` days from today, at `minutes` past midnight. */
+function dueIn(days: number, minutes: number, now: number) {
   const d = new Date(now);
-  return new Date(d.getFullYear(), d.getMonth(), d.getDate() + days, DUE_HOUR, 0).getTime();
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate() + days, 0, minutes).getTime();
 }
-const eveningOn = (dayStart: number) => {
-  const d = new Date(dayStart);
-  return new Date(d.getFullYear(), d.getMonth(), d.getDate(), DUE_HOUR, 0).getTime();
-};
 
 function deadlineStatus(at: number, now: number): string {
   const days = dayGap(now, at);
-  const date = fmtDateLabel(at);
+  const when = `${fmtDateLabel(at)} · ${fmtMinutes(minutesOfDay(at))}`;
   if (at <= now) {
-    if (days === 0) return `OVERDUE SINCE TODAY · ${date}`;
-    return `OVERDUE · ${-days} DAY${days === -1 ? '' : 'S'} PAST`;
+    if (days === 0) return `OVERDUE SINCE TODAY · ${when}`;
+    return `OVERDUE · ${-days} DAY${days === -1 ? '' : 'S'} PAST · ${when}`;
   }
-  if (days === 0) return `TODAY · ${date}`;
-  if (days === 1) return `TOMORROW · ${date}`;
-  return `${date} · IN ${days} DAYS`;
+  if (days === 0) return `TODAY · ${when}`;
+  if (days === 1) return `TOMORROW · ${when}`;
+  return `${when} · IN ${days} DAYS`;
 }
 
 /**
@@ -67,6 +63,8 @@ export function DeadlinePanel({ loop, now, onSet, onDrop }: Props) {
   }, [confirmDrop]);
 
   const tier = deadlineTier(loop, now);
+  // Moving the day keeps the hour this loop is already owed by.
+  const dueMinutes = loop.deadlineAt != null ? minutesOfDay(loop.deadlineAt) : DUE_MINUTES;
   const left = remainingMs(loop, now);
   const showChips = countdown || picking;
 
@@ -145,7 +143,7 @@ export function DeadlinePanel({ loop, now, onSet, onDrop }: Props) {
           {countdown && loop.deadlineAt != null
             ? deadlineStatus(loop.deadlineAt, now)
             : picking
-              ? 'PICK THE DATE IT IS DUE'
+              ? 'PICK THE DATE AND TIME IT IS DUE'
               : 'NO DEADLINE — COUNTS UP FROM WHEN IT OPENED'}
         </span>
       </div>
@@ -161,7 +159,7 @@ export function DeadlinePanel({ loop, now, onSet, onDrop }: Props) {
                 ['NEXT WEEK', 7],
               ] as const
             ).map(([label, days]) => (
-              <button key={label} type="button" className="dlp__chip" onClick={() => pick(eveningIn(days, now))}>
+              <button key={label} type="button" className="dlp__chip" onClick={() => pick(dueIn(days, dueMinutes, now))}>
                 {label}
               </button>
             ))}
@@ -169,10 +167,14 @@ export function DeadlinePanel({ loop, now, onSet, onDrop }: Props) {
               type="button"
               className="dlp__chip dlp__datebtn"
               aria-expanded={calOpen}
-              aria-label={loop.deadlineAt != null ? `Deadline ${fmtDateLabel(loop.deadlineAt)} — pick another date` : 'Pick a deadline date'}
+              aria-label={
+                loop.deadlineAt != null
+                  ? `Deadline ${fmtDateLabel(loop.deadlineAt)} ${fmtMinutes(dueMinutes)} — pick another date or time`
+                  : 'Pick a deadline date and time'
+              }
               onClick={() => setCalOpen((v) => !v)}
             >
-              {loop.deadlineAt != null ? fmtDateLabel(loop.deadlineAt) : 'PICK A DATE'}
+              {loop.deadlineAt != null ? `${fmtDateLabel(loop.deadlineAt)} · ${fmtMinutes(dueMinutes)}` : 'PICK A DATE'}
               <span className="dlp__caret" aria-hidden="true">{calOpen ? '▴' : '▾'}</span>
             </button>
           </div>
@@ -181,7 +183,12 @@ export function DeadlinePanel({ loop, now, onSet, onDrop }: Props) {
               title="LOOP // DEADLINE"
               value={loop.deadlineAt}
               now={now}
-              onPick={(day) => pick(eveningOn(day))}
+              withTime
+              defaultMinutes={DUE_MINUTES}
+              onPick={(day, minutes) => pick(atMinutes(day, minutes))}
+              onTimeChange={(minutes) => {
+                if (loop.deadlineAt != null) onSet(atMinutes(loop.deadlineAt, minutes));
+              }}
               onClose={() => setCalOpen(false)}
             />
           )}

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { fmtAge, fmtClock, fmtDay, fmtDuration, fmtHM, pad2 } from '../../shared/format';
 import { currentSessionMs, deadlineTier, elapsedMs } from '../../shared/timer';
+import { isFocused } from '../../shared/focus';
 import { openNotes } from '../../shared/notes';
 import type { Loop, Scope, Session } from '../../shared/types';
 import { api } from '../lib/api';
@@ -16,6 +17,8 @@ import { TimerText } from './TimerText';
 export interface InspectorActions {
   toggle: (id: string) => void;
   reopen: (id: string) => void;
+  /** Pick this loop up into FOCUS, or let it go. */
+  focus: (id: string) => void;
   close: (id: string) => void;
   priority: (id: string) => void;
   edit: (id: string, patch: { title?: string }) => Promise<boolean>;
@@ -126,7 +129,7 @@ export function Inspector({ loop, now, docked = false, pending, keysEnabled, onD
     await actions.edit(loop.id, { [field]: value });
   };
 
-  // Inspector shortcuts: S start/stop, P priority, E rename, N add a note, ⌫ close.
+  // Inspector shortcuts: S start/stop, F focus/release, P priority, E rename, N add a note, ⌫ close.
   useEffect(() => {
     if (!keysEnabled || !loop || editingStart) return;
     const onKey = (e: KeyboardEvent) => {
@@ -150,6 +153,9 @@ export function Inspector({ loop, now, docked = false, pending, keysEnabled, onD
       } else if (k === 'n') {
         e.preventDefault();
         addNote();
+      } else if (k === 'f' && loop.state !== 'closed') {
+        e.preventDefault();
+        actions.focus(loop.id);
       } else if ((e.key === 'Backspace' || e.key === 'Delete') && loop.state !== 'closed') {
         e.preventDefault();
         actions.close(loop.id);
@@ -186,6 +192,8 @@ export function Inspector({ loop, now, docked = false, pending, keysEnabled, onD
 
   const running = loop.state === 'running';
   const closed = loop.state === 'closed';
+  // In focus: one of the few you are on right now. Releasing it stops the clock.
+  const focused = isFocused(loop, now);
   // How much of the checklist is waiting behind the line on the row.
   const notesLeft = openNotes(loop.notes);
   const noteTail = notesLeft > 1 ? ` +${notesLeft - 1} MORE` : '';
@@ -228,7 +236,20 @@ export function Inspector({ loop, now, docked = false, pending, keysEnabled, onD
           title: running ? 'Stops the running session, then closes (⌫)' : 'Close this loop (⌫)',
           run: () => actions.close(loop.id),
         },
-    ...(!closed ? [{ key: 'priority', label: 'PRIORITY', pressed: loop.priority, run: () => actions.priority(loop.id) }] : []),
+    ...(!closed
+      ? [
+          {
+            key: 'focus',
+            label: focused ? 'RELEASE' : 'FOCUS',
+            pressed: focused,
+            title: focused
+              ? 'Let this one go — out of FOCUS and off the clock (F)'
+              : `Work on this now — into FOCUS, and the clock starts (F)`,
+            run: () => actions.focus(loop.id),
+          },
+          { key: 'priority', label: 'PRIORITY', pressed: loop.priority, run: () => actions.priority(loop.id) },
+        ]
+      : []),
     { key: 'rename', label: 'RENAME', title: 'Rename (E)', run: () => beginEdit('title') },
     { key: 'note', label: 'ADD NOTE', title: 'Add a line to the checklist (N)', run: addNote },
     {
@@ -275,6 +296,7 @@ export function Inspector({ loop, now, docked = false, pending, keysEnabled, onD
         <span className="term-bar__path">
           <span className="term-bar__prefix">LOOP // </span>
           <span className={`term-bar__state term-bar__state--${loop.state}`}>{loop.state.toUpperCase()}</span>
+          {focused && <span className="term-bar__focus"> · FOCUS</span>}
           {loop.scope === 'personal' && <span className="term-bar__scope"> · PERSONAL</span>}
           {loop.priority && <span className="term-bar__prio"> · PRIORITY</span>}
           {tier !== 'none' && (
@@ -335,11 +357,11 @@ export function Inspector({ loop, now, docked = false, pending, keysEnabled, onD
             type="button"
             className="insp-btn"
            
-            onClick={() => actions.toggle(loop.id)}
-            aria-label={running ? `Stop ${loop.title}` : `Start ${loop.title}`}
+            onClick={() => (focused ? actions.focus(loop.id) : actions.toggle(loop.id))}
+            aria-label={focused ? `Release ${loop.title}` : running ? `Stop ${loop.title}` : `Start ${loop.title}`}
             data-autofocus
           >
-            {running ? '■ STOP' : '▶ START'}
+            {focused ? '■ RELEASE' : running ? '■ STOP' : '▶ START'}
           </button>
         )}
       </div>

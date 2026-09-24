@@ -1,6 +1,7 @@
 import { memo, type KeyboardEvent, type MouseEvent } from 'react';
 import { ageLevel, fmtAge, fmtHM, neglectMark } from '../../shared/format';
 import { TimerText } from './TimerText';
+import { isFocused } from '../../shared/focus';
 import { deadlineTier, elapsedMs } from '../../shared/timer';
 import type { Loop } from '../../shared/types';
 import { Countdown } from './Countdown';
@@ -13,6 +14,8 @@ export type RowVariant = 'desk' | 'rail' | 'mobile';
 export interface RowActions {
   toggle: (id: string) => void;
   reopen: (id: string) => void;
+  /** Pick this loop up, or let it go (the FOCUS section). */
+  focus: (id: string) => void;
   inspect: (id: string) => void;
 }
 
@@ -51,6 +54,8 @@ function LoopRowImpl({ loop, variant, markScope = false, now, pending, selected,
   const { id, state, title, note, priority } = loop;
   const running = state === 'running';
   const closed = state === 'closed';
+  // One of the few being worked on right now — wherever the row is listed.
+  const focused = isFocused(loop, now);
   const age = now - loop.createdAt;
   const total = elapsedMs(loop, now);
 
@@ -71,6 +76,7 @@ function LoopRowImpl({ loop, variant, markScope = false, now, pending, selected,
     'row',
     `row--${variant}`,
     `row--${state}`,
+    focused ? 'is-focus' : '',
     selected ? 'is-selected' : '',
     due ? 'is-due' : '',
   ].join(' ');
@@ -144,13 +150,21 @@ function LoopRowImpl({ loop, variant, markScope = false, now, pending, selected,
     </>
   );
   const toggle = (size: 'xs' | 'sm' | 'md' | 'lg') => (
-    <ToggleButton loop={loop} size={size} onToggle={() => actions.toggle(id)} onReopen={() => actions.reopen(id)} />
+    <ToggleButton
+      loop={loop}
+      size={size}
+      // Stopping a focused loop is releasing it — one gesture, not two.
+      onToggle={() => (focused ? actions.focus(id) : actions.toggle(id))}
+      onReopen={() => actions.reopen(id)}
+      stopLabel={focused ? 'Release' : undefined}
+    />
   );
   const marker = <Marker loop={loop} tier={tier} mark={neglectMark(age)} />;
   const common = {
     className: cls,
     'data-row': id,
     'data-state': state,
+    'data-focus': focused ? 'true' : undefined,
     'data-priority': priority ? 'true' : 'false',
     'data-age': state === 'open' && !countdown ? ageLevel(age) : undefined,
     'data-tier': countdown ? tier : undefined,

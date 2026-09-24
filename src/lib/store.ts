@@ -2,8 +2,10 @@ import { ApiError, api } from './api';
 import { serverNow } from './clock';
 import { finalizeSession } from '../../shared/timer';
 import { activeNote, cleanNote, makeNote, moveNote, normalizeNotes, notesFromNote } from '../../shared/notes';
+import { dayStart, isFocused } from '../../shared/focus';
 import {
   DEFAULT_SETTINGS,
+  FOCUS_MAX,
   NOTES_MAX,
   NOTE_MAX,
   TITLE_MAX,
@@ -66,6 +68,7 @@ function normalizeLoop(l: Loop): Loop {
     timerType: l.timerType ?? 'elapsed',
     deadlineAt: l.deadlineAt ?? null,
     scope: l.scope ?? 'work',
+    focusedAt: l.focusedAt ?? null,
   };
 }
 const DOUBLE_TAP_MS = 350;
@@ -349,6 +352,7 @@ export class LoopStore {
       timerType: deadlineAt == null ? 'elapsed' : 'countdown',
       deadlineAt,
       scope,
+      focusedAt: null,
     };
     this.set({ loops: [optimistic, ...this.state.loops] });
     const q = this.queueFor(id);
@@ -383,11 +387,75 @@ export class LoopStore {
       id,
       (l) =>
         l.state === 'running'
-          ? { ...l, state: 'open', runningSince: null, accumulatedMs: finalizeSession(l, now).accumulatedMs }
+          ? { ...l, state: 'open', runningSince: null, accumulatedMs: finalizeSession(l, now).accumulatedMs, focusedAt: null }
           : l,
       () => api<LoopMutationResponse>(`/loops/${id}/stop`, { method: 'POST' }),
       'stop',
     );
+  }
+
+  // ── Focus ─────────────────────────────────────────────────────────────────
+  // The few loops being worked on right now. Taking focus starts the clock,
+  // releasing stops it, and the list is only ever today's — see shared/focus.ts.
+
+  /** Loops in focus as of now, in the order they were picked. */
+  focused(): Loop[] {
+    const now = serverNow();
+    return this.state.loops.filter((l) => isFocused(l, now));
+  }
+
+  focus(id: string) {
+    const now = serverNow();
+    const l = this.state.loops.find((x) => x.id === id);
+    if (!l) return Promise.resolve(false);
+    if (l.state === 'closed') {
+      this.notify('Reopen this loop before focusing it');
+      return Promise.resolve(false);
+    }
+    if (isFocused(l, now)) return Promise.resolve(true);
+    const taken = this.focused().length;
+    if (taken >= FOCUS_MAX) {
+      this.notify(`Focus holds ${FOCUS_MAX} loops — release one first`);
+      return Promise.resolve(false);
+    }
+    return this.mutate(
+      id,
+      (x) => ({
+        ...x,
+        focusedAt: now,
+        state: 'running',
+        runningSince: x.runningSince ?? now,
+        sessionCount: x.state === 'running' ? x.sessionCount : x.sessionCount + 1,
+      }),
+      () => api<LoopMutationResponse>(`/loops/${id}/focus`, { method: 'POST', body: { dayStart: dayStart(now) } }),
+      'focus',
+    );
+  }
+
+  release(id: string) {
+    const now = serverNow();
+    return this.mutate(
+      id,
+      (l) =>
+        l.focusedAt == null
+          ? l
+          : {
+              ...l,
+              focusedAt: null,
+              state: 'open',
+              runningSince: null,
+              accumulatedMs: l.state === 'running' ? finalizeSession(l, now).accumulatedMs : l.accumulatedMs,
+            },
+      () => api<LoopMutationResponse>(`/loops/${id}/release`, { method: 'POST' }),
+      'release',
+    );
+  }
+
+  /** The row and detail button: focus it, or let it go. */
+  toggleFocus(id: string) {
+    const l = this.state.loops.find((x) => x.id === id);
+    if (!l) return Promise.resolve(false);
+    return isFocused(l, serverNow()) ? this.release(id) : this.focus(id);
   }
 
   /**
@@ -416,6 +484,7 @@ export class LoopStore {
               closedAt: now,
               runningSince: null,
               accumulatedMs: l.state === 'running' ? finalizeSession(l, now).accumulatedMs : l.accumulatedMs,
+              focusedAt: null,
             },
       () => api<LoopMutationResponse>(`/loops/${id}/close`, { method: 'POST' }),
       'close',

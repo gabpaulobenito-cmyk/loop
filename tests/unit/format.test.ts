@@ -1,15 +1,19 @@
 import { describe, expect, it } from 'vitest';
 import {
   ageLevel,
+  atMinutes,
   dayGap,
   fmtAge,
   fmtDateLabel,
   fmtDuration,
   fmtHeaderClock,
   fmtHM,
+  fmtMinutes,
   fmtSpan,
   fmtTimer,
+  minutesOfDay,
   neglectMark,
+  parseClock,
   spanParts,
   timerParts,
 } from '../../shared/format';
@@ -110,5 +114,37 @@ describe('fmtSpan', () => {
     expect(fmtSpan(60 * D + 3 * H)).toBe('2MO · 0D · 3H');
     expect(spanParts(31 * D + 5 * H)).toEqual(['1MO', '1D', '5H']);
     expect(spanParts(4 * H)).toEqual(['4H 0M']);
+  });
+});
+
+describe('time of day', () => {
+  const at = (h: number, m = 0) => new Date(2026, 8, 23, h, m).getTime();
+
+  it('reads and writes the clock a timestamp carries', () => {
+    expect(minutesOfDay(at(17))).toBe(17 * 60);
+    expect(minutesOfDay(at(9, 30))).toBe(9 * 60 + 30);
+    expect(fmtMinutes(17 * 60)).toBe('17:00');
+    expect(fmtMinutes(9 * 60 + 5)).toBe('09:05');
+    expect(atMinutes(at(17), 9 * 60 + 30)).toBe(at(9, 30));
+    // Moving the hour stays on the same local day, whatever the old time was.
+    expect(atMinutes(at(0, 5), 23 * 60 + 59)).toBe(at(23, 59));
+  });
+
+  it('takes the shapes people type, and refuses what is not a time', () => {
+    expect(parseClock('17:00')).toBe(17 * 60);
+    expect(parseClock('1700')).toBe(17 * 60);
+    expect(parseClock('17.00')).toBe(17 * 60);
+    expect(parseClock('930')).toBe(9 * 60 + 30);
+    expect(parseClock('9')).toBe(9 * 60);
+    expect(parseClock(' 5pm ')).toBe(17 * 60);
+    expect(parseClock('9:30AM')).toBe(9 * 60 + 30);
+    expect(parseClock('12am')).toBe(0);
+    expect(parseClock('12pm')).toBe(12 * 60);
+    expect(parseClock('')).toBeNull();
+    expect(parseClock('17:')).toBeNull();
+    expect(parseClock('24:00')).toBeNull();
+    expect(parseClock('12:75')).toBeNull();
+    expect(parseClock('13pm')).toBeNull();
+    expect(parseClock('friday')).toBeNull();
   });
 });
